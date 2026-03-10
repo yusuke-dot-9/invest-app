@@ -22,17 +22,17 @@ def load_data(ticker_symbol):
     if not ticker_symbol.endswith('.T'):
         ticker_symbol = f"{ticker_symbol}.T"
         
-    # 日経平均と個別銘柄のデータを過去5年分取得
-    nk225 = yf.download("^N225", period="5y", progress=False)['Close']
-    df = yf.download(ticker_symbol, period="5y", progress=False)
+    # yf.downloadではなく、エラーが起きにくいyf.Ticker(...).history(...)を使用
+    nk225_data = yf.Ticker("^N225").history(period="5y")
+    df_data = yf.Ticker(ticker_symbol).history(period="5y")
     
-    if df.empty:
+    if df_data.empty or nk225_data.empty:
         return None, None
         
-    df = df[['Open', 'High', 'Low', 'Close']].dropna()
+    df = df_data[['Open', 'High', 'Low', 'Close']].dropna()
     
-    # 日経平均の指標
-    nk_df = pd.DataFrame({'Close': nk225}).dropna()
+    # 日経平均の指標（スカラー値エラーを防ぐために['Close']を明示的に指定）
+    nk_df = pd.DataFrame({'Close': nk225_data['Close']}).dropna()
     nk_df['SMA25'] = nk_df['Close'].rolling(window=25).mean()
     nk_df['SMA75'] = nk_df['Close'].rolling(window=75).mean()
     nk_df['Uptrend'] = nk_df['SMA25'] > nk_df['SMA75']
@@ -44,12 +44,16 @@ def load_data(ticker_symbol):
     
     # 順張り用：20日高値、3日安値
     df['High20'] = df['High'].rolling(window=20).max()
-    df['Low3'] = df['Low'].rolling(window=3).min().shift(1) # 前日までの3日間安値
+    df['Low3'] = df['Low'].rolling(window=3).min().shift(1)
     
     # 逆張り用：RSI、ボリンジャーバンド
     df['RSI14'] = calculate_rsi(df['Close'], 14)
     std20 = df['Close'].rolling(window=20).std()
     df['BB_Lower'] = df['SMA20'] - (2 * std20)
+    
+    # タイムゾーンのズレによる結合エラーを防ぐ処理
+    df.index = df.index.tz_localize(None)
+    nk_df.index = nk_df.index.tz_localize(None)
     
     # 日経平均のトレンドを結合
     df = df.join(nk_df[['Uptrend']], how='left').fillna(method='ffill')
@@ -63,6 +67,7 @@ def run_backtest(df):
     
     in_trend = False
     in_reversion = False
+    entry_price_trend = 0
     entry_price_rev = 0
     
     for i in range(200, len(df)):
@@ -71,13 +76,11 @@ def run_backtest(df):
         
         # --- ロジック1：順張り（アイデアB出口） ---
         if not in_trend:
-            # 買い条件: 日経上昇、200日線上、直近20日高値更新後、5日線まで押した
             if today['Uptrend'] and today['Close'] > today['SMA200']:
                 if yesterday['High'] >= yesterday['High20'] and today['Low'] <= today['SMA5']:
                     in_trend = True
                     entry_price_trend = today['Close']
         else:
-            # 売り条件: 前日までの3日間安値を下回った（トレイリングストップ）
             if today['Close'] < today['Low3']:
                 in_trend = False
                 profit = (today['Close'] / entry_price_trend) - 1
@@ -85,12 +88,10 @@ def run_backtest(df):
                 
         # --- ロジック2：逆張り（アイデアA出口） ---
         if not in_reversion:
-            # 買い条件: 200日線上、RSI<30、BB-2σ以下
             if today['Close'] > today['SMA200'] and today['RSI14'] < 30 and today['Close'] < today['BB_Lower']:
                 in_reversion = True
                 entry_price_rev = today['Close']
         else:
-            # 売り条件: RSI>70 または -5%損切
             if today['RSI14'] > 70 or today['Close'] <= entry_price_rev * 0.95:
                 in_reversion = False
                 profit = (today['Close'] / entry_price_rev) - 1
@@ -110,14 +111,9 @@ if df is not None:
     st.subheader(f"📊 {symbol} の分析結果")
     latest = df.iloc[-1]
     
-    # 今日のシグナル判定
     signal_msg = "🟢 待機（シグナルなし）"
-    
-    # 順張りシグナル
     if latest['Uptrend'] and latest['Close'] > latest['SMA200'] and df.iloc[-2]['High'] >= df.iloc[-2]['High20'] and latest['Low'] <= latest['SMA5']:
         signal_msg = "🔥 【順張り】押し目買いシグナル点灯！"
-        
-    # 逆張りシグナル
     elif latest['Close'] > latest['SMA200'] and latest['RSI14'] < 30 and latest['Close'] < latest['BB_Lower']:
         signal_msg = "🚨 【逆張り】パニック売られすぎ！リバウンド買いシグナル！"
 
@@ -130,10 +126,7 @@ if df is not None:
     col4.metric("200日線との関係", "上（長期強気）" if latest['Close'] > latest['SMA200'] else "下（長期弱気）")
     
     st.divider()
-    
-    # バックテスト実行
     t_trend, t_rev = run_backtest(df)
-    
     st.subheader("📈 過去5年間のバックテスト成績")
     
     tab1, tab2 = st.tabs(["🔥 順張り（ブレイク＆押し目）", "🚨 逆張り（リバウンド狙い）"])
