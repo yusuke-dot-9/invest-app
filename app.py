@@ -55,4 +55,10 @@ try:
         st.subheader("💡 今日の相場状況")
         col1, col2, col3 = st.columns(3)
         col1.metric("TQQQ 現在値", f"${latest['TQQQ']:.2f}", f"{latest['TQQQ'] - prev['TQQQ']:.2f} (前日比)")
-        col2.metric("VIX (恐怖指数)", f"{
+        col2.metric("VIX (恐怖指数)", f"{latest['VIX']:.2f}", "30以上でパニック")
+        col3.metric("直近20日高値からの下落率", f"{latest['Drawdown']:.1f}%", "-25%で撤退")
+        
+        st.markdown(f"### 本日のアクション指示：**{signal}**")
+        st.divider()
+        
+        # --- C機能：適正ポジション（
