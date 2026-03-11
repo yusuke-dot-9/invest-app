@@ -5,6 +5,7 @@ import numpy as np
 import time
 import datetime
 import requests
+import io
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="日本株 日経225分析システム", layout="wide")
@@ -38,6 +39,7 @@ def load_data(ticker_symbol):
     if not ticker_symbol.endswith('.T'):
         ticker_symbol = f"{ticker_symbol}.T"
     
+    # 日経平均と個別株の取得
     nk225 = yf.Ticker("^N225").history(period="5y")
     df_data = yf.Ticker(ticker_symbol).history(period="5y")
     
@@ -87,28 +89,30 @@ def run_backtest(df):
             t_rev.append((d['Close'] / p_rev) - 1)
     return t_trend, t_rev
 
-# --- 6. 銘柄リスト自動取得 (日本語版Wikipediaから取得) ---
+# --- 6. 銘柄リスト取得（403エラー回避版） ---
 @st.cache_data(ttl=86400)
 def get_nikkei225_list():
     try:
-        # 日本語版Wikipediaの日経平均ページ
         url = "https://ja.wikipedia.org/wiki/%E6%97%A5%E7%B5%8C%E5%B9%B3%E5%9D%87%E6%A0%AA%E4%BE%A1%E3%81%AE%E6%A7%8B%E6%88%90%E9%8A%98%E6%9F%84%E4%B8%80%E8%A6%A7"
-        dfs = pd.read_html(url)
-        # 銘柄テーブルを探す
+        # 403エラーを回避するためのヘッダー
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers)
+        
+        # HTMLを解析してテーブルを取得
+        dfs = pd.read_html(io.StringIO(response.text))
         for df in dfs:
             if 'コード' in df.columns and '銘柄名' in df.columns:
                 df['コード'] = df['コード'].astype(str)
-                # 銘柄名をキー、コードを値にする辞書
                 return dict(zip(df['銘柄名'], df['コード']))
     except Exception as e:
-        st.error(f"リスト取得エラー: {e}")
+        st.error(f"リスト取得でエラーが発生しました: {e}")
+    # 最終的なバックアップ
     return {"トヨタ自動車": "7203", "三菱商事": "8058", "ソフトバンクグループ": "9984"}
 
 # --- サイドバー ---
 st.sidebar.header("🔍 銘柄選択")
 COMPANY_DICT = get_nikkei225_list()
 
-# 会社名リストをソートして表示
 company_names = sorted(list(COMPANY_DICT.keys()))
 selected_name = st.sidebar.selectbox("銘柄名を入力・選択", options=company_names)
 ticker_input = COMPANY_DICT[selected_name]
@@ -121,46 +125,48 @@ with tab1:
     if df is not None:
         latest, prev = df.iloc[-1], df.iloc[-2]
         
-        # 判定ロジック
+        # 判定
         sig = "🟢 待機"
         if latest['Uptrend'] and latest['Close'] > latest['SMA200'] and prev['High'] >= prev['High20'] and latest['Low'] <= latest['SMA5']:
-            sig = "🔥 【順張り】買いシグナル！"
+            sig = "🔥 【順張り】押し目買いシグナル！"
         elif latest['Close'] > latest['SMA200'] and latest['RSI14'] < 30 and latest['Close'] < latest['BB_Lower']:
-            sig = "🚨 【逆張り】買いシグナル！"
+            sig = "🚨 【逆張り】売られすぎシグナル！"
             
         st.subheader(f"判定：{sig}")
         col1, col2, col3 = st.columns(3)
         col1.metric("株価", f"¥{latest['Close']:,.1f}")
         col2.metric("RSI", f"{latest['RSI14']:.1f}")
-        col3.metric("日経トレンド", "上昇" if latest['Uptrend'] else "下落")
+        col3.metric("日経トレンド", "上昇中 📈" if latest['Uptrend'] else "下落中 📉")
 
-        if st.button("📱 LINE通知を送る"):
+        if st.button("📱 この結果をLINEに送信"):
             send_line_notification(f"【判定】{selected_name}\n結果: {sig}\n株価: {latest['Close']:,.1f}円")
 
         st.divider()
         t_trend, t_rev = run_backtest(df)
-        st.subheader("📈 バックテスト（過去5年）")
+        st.subheader("📈 バックテスト結果（過去5年）")
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("**順張り（押し目）**")
             if t_trend:
                 win = len([x for x in t_trend if x > 0]) / len(t_trend) * 100
-                st.write(f"順張り勝率: **{win:.1f}%** ({len(t_trend)}回)")
-            else: st.write("順張りデータなし")
+                st.write(f"勝率: **{win:.1f}%** / 平均利益: **{np.mean(t_trend)*100:.2f}%**")
+            else: st.write("一致データなし")
         with c2:
+            st.markdown("**逆張り（リバウンド）**")
             if t_rev:
                 win = len([x for x in t_rev if x > 0]) / len(t_rev) * 100
-                st.write(f"逆張り勝率: **{win:.1f}%** ({len(t_rev)}回)")
-            else: st.write("逆張りデータなし")
+                st.write(f"勝率: **{win:.1f}%** / 平均利益: **{np.mean(t_rev)*100:.2f}%**")
+            else: st.write("一致データなし")
     else:
-        st.error("データが読み込めません。")
+        st.error("データ読み込みエラー")
 
 with tab2:
-    if st.button("🚀 225銘柄を一斉スキャン"):
+    if st.button("🚀 225銘柄をスキャンする"):
         hits = []
         pb = st.progress(0)
         items = list(COMPANY_DICT.items())
         for i, (name, code) in enumerate(items):
-            pb.progress((i+1)/len(items), text=f"{name} を確認中...")
+            pb.progress((i+1)/len(items), text=f"{name} をスキャン中...")
             try:
                 sdf, _ = load_data(code)
                 if sdf is not None and len(sdf) > 2:
@@ -170,9 +176,12 @@ with tab2:
                         s = "順張り🔥"
                     elif l['Close'] > l['SMA200'] and l['RSI14'] < 30 and l['Close'] < l['BB_Lower']:
                         s = "逆張り🚨"
-                    if s: hits.append({"銘柄": name, "コード": code, "判定": s, "株価": f"{l['Close']:,.1f}"})
+                    if s: hits.append({"銘柄": name, "判定": s, "株価": f"{l['Close']:,.1f}円"})
                 time.sleep(0.05)
             except: continue
         pb.empty()
-        if hits: st.table(pd.DataFrame(hits))
-        else: st.info("本日のシグナルはありません。")
+        if hits:
+            st.success(f"🎉 {len(hits)} 銘柄が条件に一致しました！")
+            st.table(pd.DataFrame(hits))
+        else:
+            st.info("本日のシグナル点灯銘柄はありません。")
