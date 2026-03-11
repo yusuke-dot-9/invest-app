@@ -88,27 +88,40 @@ def run_backtest(df):
 # --- サイドバー入力（日経225自動取得機能） ---
 st.sidebar.header("🔍 銘柄選択")
 
-@st.cache_data(ttl=86400) # 1日1回だけ最新リストを自動取得（負荷軽減）
+@st.cache_data(ttl=86400) # 1日1回だけ最新リストを自動取得
 def get_nikkei225_dict():
     try:
-        # Wikipediaから最新の日経225構成銘柄一覧を自動で読み取る
         url = "https://ja.wikipedia.org/wiki/%E6%97%A5%E7%B5%8C%E5%B9%B3%E5%9D%87%E6%A0%AA%E4%BE%A1%E3%81%AE%E6%A7%8B%E6%88%90%E9%8A%98%E6%9F%84%E4%B8%80%E8%A6%A7"
         dfs = pd.read_html(url)
         for df in dfs:
             if 'コード' in df.columns and '銘柄名' in df.columns:
                 df['コード'] = df['コード'].astype(str)
                 return dict(zip(df['銘柄名'], df['コード']))
-    except:
+    except Exception as e:
+        st.sidebar.warning("Wikipediaからの自動取得に失敗しました。予備の主要銘柄リストを使用します。")
         pass
-    # 万が一、Wikipediaの構成が変わって読み取れなかった時の予備リスト
-    return {"トヨタ自動車": "7203", "ソフトバンクグループ": "9984", "東京エレクトロン": "8035"}
+        
+    # Wikipedia取得失敗時の強力な予備リスト（主要50社以上）
+    return {
+        "トヨタ自動車": "7203", "ソニーグループ": "6758", "三菱UFJFG": "8306", "キーエンス": "6861",
+        "東京エレクトロン": "8035", "信越化学工業": "4063", "三井住友FG": "8316", "日立製作所": "6501",
+        "伊藤忠商事": "8001", "三菱商事": "8058", "ソフトバンクグループ": "9984", "ホンダ": "7267",
+        "武田薬品工業": "4502", "KDDI": "9433", "ファーストリテイリング": "9983", "任天堂": "7974",
+        "三井物産": "8031", "ダイキン工業": "6367", "みずほFG": "8411", "リクルートHD": "6098",
+        "第一三共": "4568", "デンソー": "6902", "日本電信電話": "9432", "アステラス製薬": "4503",
+        "村田製作所": "6981", "丸紅": "8002", "オリックス": "8591", "パナソニックHD": "6752",
+        "小松製作所": "6301", "富士フイルムHD": "4901", "ブリヂストン": "5108", "アサヒグループHD": "2502",
+        "キヤノン": "7751", "セブン＆アイHD": "3382", "日本たばこ産業(JT)": "2914", "花王": "4452",
+        "中外製薬": "4519", "ニデック": "6594", "アドバンテスト": "6857", "ファナック": "6954",
+        "SMC": "6273", "ディスコ": "6146", "ルネサスエレクトロニクス": "6723", "コマツ": "6301",
+        "スズキ": "7269", "マツダ": "7261", "日産自動車": "7201", "SUBARU": "7270", "三菱地所": "8802"
+    }
 
 COMPANY_DICT = get_nikkei225_dict()
 
-search_mode = st.sidebar.radio("検索方法", ["リストから選ぶ（日経225全銘柄）", "証券コードを直接入力"])
+search_mode = st.sidebar.radio("検索方法", ["リストから選ぶ", "証券コードを直接入力"])
 
-if search_mode == "リストから選ぶ（日経225全銘柄）":
-    # 225社すべてが格納されたドロップダウン
+if search_mode == "リストから選ぶ":
     selected_name = st.sidebar.selectbox("会社名を選択（文字入力で絞り込み可）", list(COMPANY_DICT.keys()))
     ticker_input = COMPANY_DICT[selected_name]
     st.sidebar.success(f"👉 証券コード: {ticker_input}")
@@ -119,7 +132,7 @@ else:
 df, symbol = load_data(ticker_input)
 
 if df is not None:
-    st.subheader(f"📊 {symbol} ({selected_name if search_mode == 'リストから選ぶ（日経225全銘柄）' else ''}) の分析結果")
+    st.subheader(f"📊 {symbol} ({selected_name if search_mode == 'リストから選ぶ' else ''}) の分析結果")
     latest = df.iloc[-1]
     
     signal_msg = "🟢 待機（シグナルなし）"
@@ -167,4 +180,4 @@ if df is not None:
             st.write("過去5年間で条件に一致するトレードはありませんでした。")
 
 else:
-    st.error("データを取得できませんでした。正しい証券コードを入力してください。")
+    st.error("データを取得できませんでした。証券コードを確認するか、時間を置いて再試行してください。")
