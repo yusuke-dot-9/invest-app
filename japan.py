@@ -18,9 +18,11 @@ def calculate_rsi(series, period=14):
 # --- データ取得と計算 ---
 @st.cache_data(ttl=3600)
 def load_data(ticker_symbol):
+    # 日本株は「コード.T」にする必要があるため整形
     if not ticker_symbol.endswith('.T'):
         ticker_symbol = f"{ticker_symbol}.T"
         
+    # yf.downloadではなく、エラーが起きにくいyf.Ticker(...).history(...)を使用
     nk225_data = yf.Ticker("^N225").history(period="5y")
     df_data = yf.Ticker(ticker_symbol).history(period="5y")
     
@@ -29,22 +31,31 @@ def load_data(ticker_symbol):
         
     df = df_data[['Open', 'High', 'Low', 'Close']].dropna()
     
+    # 日経平均の指標（スカラー値エラーを防ぐために['Close']を明示的に指定）
     nk_df = pd.DataFrame({'Close': nk225_data['Close']}).dropna()
     nk_df['SMA25'] = nk_df['Close'].rolling(window=25).mean()
     nk_df['SMA75'] = nk_df['Close'].rolling(window=75).mean()
     nk_df['Uptrend'] = nk_df['SMA25'] > nk_df['SMA75']
     
+    # 個別銘柄の指標
     df['SMA5'] = df['Close'].rolling(window=5).mean()
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA200'] = df['Close'].rolling(window=200).mean()
+    
+    # 順張り用：20日高値、3日安値
     df['High20'] = df['High'].rolling(window=20).max()
     df['Low3'] = df['Low'].rolling(window=3).min().shift(1)
+    
+    # 逆張り用：RSI、ボリンジャーバンド
     df['RSI14'] = calculate_rsi(df['Close'], 14)
     std20 = df['Close'].rolling(window=20).std()
     df['BB_Lower'] = df['SMA20'] - (2 * std20)
     
+    # タイムゾーンのズレによる結合エラーを防ぐ処理
     df.index = df.index.tz_localize(None)
     nk_df.index = nk_df.index.tz_localize(None)
+    
+    # 日経平均のトレンドを結合
     df = df.join(nk_df[['Uptrend']], how='left').fillna(method='ffill')
     
     return df, ticker_symbol
@@ -53,6 +64,7 @@ def load_data(ticker_symbol):
 def run_backtest(df):
     trades_trend = []
     trades_reversion = []
+    
     in_trend = False
     in_reversion = False
     entry_price_trend = 0
@@ -62,6 +74,7 @@ def run_backtest(df):
         today = df.iloc[i]
         yesterday = df.iloc[i-1]
         
+        # --- ロジック1：順張り（アイデアB出口） ---
         if not in_trend:
             if today['Uptrend'] and today['Close'] > today['SMA200']:
                 if yesterday['High'] >= yesterday['High20'] and today['Low'] <= today['SMA5']:
@@ -73,6 +86,7 @@ def run_backtest(df):
                 profit = (today['Close'] / entry_price_trend) - 1
                 trades_trend.append(profit)
                 
+        # --- ロジック2：逆張り（アイデアA出口） ---
         if not in_reversion:
             if today['Close'] > today['SMA200'] and today['RSI14'] < 30 and today['Close'] < today['BB_Lower']:
                 in_reversion = True
@@ -85,41 +99,16 @@ def run_backtest(df):
                 
     return trades_trend, trades_reversion
 
-# --- サイドバー入力（日経225自動取得機能） ---
+# --- サイドバー入力 ---
 st.sidebar.header("🔍 銘柄選択")
-
-@st.cache_data(ttl=86400) # 1日1回だけ最新リストを自動取得（負荷軽減）
-def get_nikkei225_dict():
-    try:
-        # Wikipediaから最新の日経225構成銘柄一覧を自動で読み取る
-        url = "https://ja.wikipedia.org/wiki/%E6%97%A5%E7%B5%8C%E5%B9%B3%E5%9D%87%E6%A0%AA%E4%BE%A1%E3%81%AE%E6%A7%8B%E6%88%90%E9%8A%98%E6%9F%84%E4%B8%80%E8%A6%A7"
-        dfs = pd.read_html(url)
-        for df in dfs:
-            if 'コード' in df.columns and '銘柄名' in df.columns:
-                df['コード'] = df['コード'].astype(str)
-                return dict(zip(df['銘柄名'], df['コード']))
-    except:
-        pass
-    # 万が一、Wikipediaの構成が変わって読み取れなかった時の予備リスト
-    return {"トヨタ自動車": "7203", "ソフトバンクグループ": "9984", "東京エレクトロン": "8035"}
-
-COMPANY_DICT = get_nikkei225_dict()
-
-search_mode = st.sidebar.radio("検索方法", ["リストから選ぶ（日経225全銘柄）", "証券コードを直接入力"])
-
-if search_mode == "リストから選ぶ（日経225全銘柄）":
-    # 225社すべてが格納されたドロップダウン
-    selected_name = st.sidebar.selectbox("会社名を選択（文字入力で絞り込み可）", list(COMPANY_DICT.keys()))
-    ticker_input = COMPANY_DICT[selected_name]
-    st.sidebar.success(f"👉 証券コード: {ticker_input}")
-else:
-    ticker_input = st.sidebar.text_input("証券コード4桁を入力 (例: 7203)", value="7203")
+ticker_input = st.sidebar.text_input("証券コードを入力 (例: 7203, 9984, 8035)", value="7203")
+st.sidebar.caption("※日本の証券コード4桁を入力してください。")
 
 # --- メイン画面 ---
 df, symbol = load_data(ticker_input)
 
 if df is not None:
-    st.subheader(f"📊 {symbol} ({selected_name if search_mode == 'リストから選ぶ（日経225全銘柄）' else ''}) の分析結果")
+    st.subheader(f"📊 {symbol} の分析結果")
     latest = df.iloc[-1]
     
     signal_msg = "🟢 待機（シグナルなし）"
