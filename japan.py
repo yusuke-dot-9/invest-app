@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import time
 
 # --- ページ設定 ---
 st.set_page_config(page_title="日本株 短期トレード判定システム", layout="wide")
@@ -28,8 +29,8 @@ def load_data(ticker_symbol):
         return None, None
         
     df = df_data[['Open', 'High', 'Low', 'Close']].dropna()
-    
     nk_df = pd.DataFrame({'Close': nk225_data['Close']}).dropna()
+    
     nk_df['SMA25'] = nk_df['Close'].rolling(window=25).mean()
     nk_df['SMA75'] = nk_df['Close'].rolling(window=75).mean()
     nk_df['Uptrend'] = nk_df['SMA25'] > nk_df['SMA75']
@@ -97,24 +98,13 @@ def get_nikkei225_dict():
             if 'コード' in df.columns and '銘柄名' in df.columns:
                 df['コード'] = df['コード'].astype(str)
                 return dict(zip(df['銘柄名'], df['コード']))
-    except Exception as e:
-        st.sidebar.warning("Wikipediaからの自動取得に失敗しました。予備の主要銘柄リストを使用します。")
+    except:
         pass
-        
-    # Wikipedia取得失敗時の強力な予備リスト（主要50社以上）
     return {
         "トヨタ自動車": "7203", "ソニーグループ": "6758", "三菱UFJFG": "8306", "キーエンス": "6861",
         "東京エレクトロン": "8035", "信越化学工業": "4063", "三井住友FG": "8316", "日立製作所": "6501",
         "伊藤忠商事": "8001", "三菱商事": "8058", "ソフトバンクグループ": "9984", "ホンダ": "7267",
-        "武田薬品工業": "4502", "KDDI": "9433", "ファーストリテイリング": "9983", "任天堂": "7974",
-        "三井物産": "8031", "ダイキン工業": "6367", "みずほFG": "8411", "リクルートHD": "6098",
-        "第一三共": "4568", "デンソー": "6902", "日本電信電話": "9432", "アステラス製薬": "4503",
-        "村田製作所": "6981", "丸紅": "8002", "オリックス": "8591", "パナソニックHD": "6752",
-        "小松製作所": "6301", "富士フイルムHD": "4901", "ブリヂストン": "5108", "アサヒグループHD": "2502",
-        "キヤノン": "7751", "セブン＆アイHD": "3382", "日本たばこ産業(JT)": "2914", "花王": "4452",
-        "中外製薬": "4519", "ニデック": "6594", "アドバンテスト": "6857", "ファナック": "6954",
-        "SMC": "6273", "ディスコ": "6146", "ルネサスエレクトロニクス": "6723", "コマツ": "6301",
-        "スズキ": "7269", "マツダ": "7261", "日産自動車": "7201", "SUBARU": "7270", "三菱地所": "8802"
+        "武田薬品工業": "4502", "KDDI": "9433", "ファーストリテイリング": "9983", "任天堂": "7974"
     }
 
 COMPANY_DICT = get_nikkei225_dict()
@@ -128,56 +118,105 @@ if search_mode == "リストから選ぶ":
 else:
     ticker_input = st.sidebar.text_input("証券コード4桁を入力 (例: 7203)", value="7203")
 
-# --- メイン画面 ---
-df, symbol = load_data(ticker_input)
+# --- メイン画面（タブ分け） ---
+tab_single, tab_scan = st.tabs(["📊 個別銘柄の分析", "🚀 全銘柄シグナルスキャン"])
 
-if df is not None:
-    st.subheader(f"📊 {symbol} ({selected_name if search_mode == 'リストから選ぶ' else ''}) の分析結果")
-    latest = df.iloc[-1]
-    
-    signal_msg = "🟢 待機（シグナルなし）"
-    if latest['Uptrend'] and latest['Close'] > latest['SMA200'] and df.iloc[-2]['High'] >= df.iloc[-2]['High20'] and latest['Low'] <= latest['SMA5']:
-        signal_msg = "🔥 【順張り】押し目買いシグナル点灯！"
-    elif latest['Close'] > latest['SMA200'] and latest['RSI14'] < 30 and latest['Close'] < latest['BB_Lower']:
-        signal_msg = "🚨 【逆張り】パニック売られすぎ！リバウンド買いシグナル！"
+with tab_single:
+    df, symbol = load_data(ticker_input)
 
-    st.markdown(f"### 🎯 本日のアクション：**{signal_msg}**")
+    if df is not None:
+        st.subheader(f"📊 {symbol} ({selected_name if search_mode == 'リストから選ぶ' else ''}) の分析結果")
+        latest = df.iloc[-1]
+        
+        signal_msg = "🟢 待機（シグナルなし）"
+        if latest['Uptrend'] and latest['Close'] > latest['SMA200'] and df.iloc[-2]['High'] >= df.iloc[-2]['High20'] and latest['Low'] <= latest['SMA5']:
+            signal_msg = "🔥 【順張り】押し目買いシグナル点灯！"
+        elif latest['Close'] > latest['SMA200'] and latest['RSI14'] < 30 and latest['Close'] < latest['BB_Lower']:
+            signal_msg = "🚨 【逆張り】パニック売られすぎ！リバウンド買いシグナル！"
+
+        st.markdown(f"### 🎯 本日のアクション：**{signal_msg}**")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("現在値", f"¥{latest['Close']:.1f}")
+        col2.metric("日経平均トレンド", "上昇中 📈" if latest['Uptrend'] else "下落中 📉")
+        col3.metric("RSI (14日)", f"{latest['RSI14']:.1f}", "30以下で売られすぎ")
+        col4.metric("200日線との関係", "上（長期強気）" if latest['Close'] > latest['SMA200'] else "下（長期弱気）")
+        
+        st.divider()
+        t_trend, t_rev = run_backtest(df)
+        st.subheader("📈 過去5年間のバックテスト成績")
+        
+        c_trend, c_rev = st.columns(2)
+        with c_trend:
+            st.markdown("**🔥 順張り（ブレイク＆押し目）**")
+            if len(t_trend) > 0:
+                win_rate = len([x for x in t_trend if x > 0]) / len(t_trend) * 100
+                avg_return = np.mean(t_trend) * 100
+                st.write(f"勝率: **{win_rate:.1f}%** (全{len(t_trend)}回) / 平均利益: **{avg_return:.2f}%**")
+            else:
+                st.write("過去5年で条件一致なし")
+                
+        with c_rev:
+            st.markdown("**🚨 逆張り（リバウンド狙い）**")
+            if len(t_rev) > 0:
+                win_rate = len([x for x in t_rev if x > 0]) / len(t_rev) * 100
+                avg_return = np.mean(t_rev) * 100
+                st.write(f"勝率: **{win_rate:.1f}%** (全{len(t_rev)}回) / 平均利益: **{avg_return:.2f}%**")
+            else:
+                st.write("過去5年で条件一致なし")
+    else:
+        st.error("データを取得できませんでした。")
+
+with tab_scan:
+    st.subheader("🕵️‍♂️ お宝銘柄 全自動スキャン")
+    st.write("リスト内の全銘柄をチェックし、本日「買いシグナル」が点灯している銘柄だけを抽出します。")
     
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("現在値", f"¥{latest['Close']:.1f}")
-    col2.metric("日経平均トレンド", "上昇中 📈" if latest['Uptrend'] else "下落中 📉")
-    col3.metric("RSI (14日)", f"{latest['RSI14']:.1f}", "30以下で売られすぎ")
-    col4.metric("200日線との関係", "上（長期強気）" if latest['Close'] > latest['SMA200'] else "下（長期弱気）")
-    
-    st.divider()
-    t_trend, t_rev = run_backtest(df)
-    st.subheader("📈 過去5年間のバックテスト成績")
-    
-    tab1, tab2 = st.tabs(["🔥 順張り（ブレイク＆押し目）", "🚨 逆張り（リバウンド狙い）"])
-    
-    with tab1:
-        st.write("【出口戦略】3日間安値を下回るまでホールド（トレイリングストップ）")
-        if len(t_trend) > 0:
-            win_rate = len([x for x in t_trend if x > 0]) / len(t_trend) * 100
-            avg_return = np.mean(t_trend) * 100
-            c1, c2, c3 = st.columns(3)
-            c1.metric("トレード回数", f"{len(t_trend)} 回")
-            c2.metric("勝率", f"{win_rate:.1f} %")
-            c3.metric("1回あたりの平均利益", f"{avg_return:.2f} %")
-        else:
-            st.write("過去5年間で条件に一致するトレードはありませんでした。")
+    if st.button("🚀 スキャンを開始する（数分かかります）"):
+        progress_text = "データを取得・分析中..."
+        my_bar = st.progress(0, text=progress_text)
+        
+        hit_list = []
+        tickers = list(COMPANY_DICT.items())
+        total_tickers = len(tickers)
+        
+        # エラーを出さないように少しずつ進める
+        for i, (name, code) in enumerate(tickers):
+            # 進捗バーの更新
+            progress_percent = int(((i + 1) / total_tickers) * 100)
+            my_bar.progress(progress_percent, text=f"{progress_percent}% 完了 ({name} を確認中...)")
             
-    with tab2:
-        st.write("【出口戦略】RSI70で利確 / -5%で損切")
-        if len(t_rev) > 0:
-            win_rate = len([x for x in t_rev if x > 0]) / len(t_rev) * 100
-            avg_return = np.mean(t_rev) * 100
-            c1, c2, c3 = st.columns(3)
-            c1.metric("トレード回数", f"{len(t_rev)} 回")
-            c2.metric("勝率", f"{win_rate:.1f} %")
-            c3.metric("1回あたりの平均利益", f"{avg_return:.2f} %")
+            try:
+                # データの読み込み
+                scan_df, _ = load_data(code)
+                if scan_df is not None and len(scan_df) >= 200:
+                    latest_scan = scan_df.iloc[-1]
+                    prev_scan = scan_df.iloc[-2]
+                    
+                    signal = None
+                    # 順張り判定
+                    if latest_scan['Uptrend'] and latest_scan['Close'] > latest_scan['SMA200'] and prev_scan['High'] >= prev_scan['High20'] and latest_scan['Low'] <= latest_scan['SMA5']:
+                        signal = "🔥 順張り（押し目買い）"
+                    # 逆張り判定
+                    elif latest_scan['Close'] > latest_scan['SMA200'] and latest_scan['RSI14'] < 30 and latest_scan['Close'] < latest_scan['BB_Lower']:
+                        signal = "🚨 逆張り（リバウンド）"
+                        
+                    if signal:
+                        hit_list.append({
+                            "銘柄名": name,
+                            "コード": code,
+                            "シグナル": signal,
+                            "現在値": f"¥{latest_scan['Close']:.1f}"
+                        })
+                # アクセス制限回避のため0.2秒待機
+                time.sleep(0.2)
+            except:
+                pass # エラーが起きた銘柄はスキップ
+                
+        my_bar.empty() # スキャン完了でバーを消す
+        
+        if hit_list:
+            st.success(f"🎉 スキャン完了！本日シグナルが点灯しているのは以下の {len(hit_list)} 銘柄です。")
+            st.table(pd.DataFrame(hit_list))
+            st.info("※気になる銘柄を見つけたら、「個別銘柄の分析」タブにコードを入力してバックテストの勝率を確認してください！")
         else:
-            st.write("過去5年間で条件に一致するトレードはありませんでした。")
-
-else:
-    st.error("データを取得できませんでした。証券コードを確認するか、時間を置いて再試行してください。")
+            st.info("スキャン完了。残念ながら、本日はシグナルが点灯している銘柄はありませんでした。")
