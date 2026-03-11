@@ -6,8 +6,8 @@ import time
 import requests
 
 # --- 1. ページ設定 ---
-st.set_page_config(page_title="日経225判定システム・完全版", layout="wide")
-st.title("🇯🇵 日経225 全銘柄 判定＆スキャン")
+st.set_page_config(page_title="日経225判定システム・プロ版", layout="wide")
+st.title("🇯🇵 日経225 判定＆バックテスト詳細分析")
 
 # --- 2. LINE通知関数 ---
 def send_line_notification(message):
@@ -57,22 +57,28 @@ def load_data(ticker_symbol):
     except:
         return None, None
 
-# --- 5. 業種・財務データ取得（エラーガード強化版） ---
+# --- 5. 業種・財務データ取得（超安全版） ---
 @st.cache_data(ttl=86400)
 def get_fundamentals(ticker_symbol):
     if not ticker_symbol.endswith('.T'): ticker_symbol = f"{ticker_symbol}.T"
     try:
         t = yf.Ticker(ticker_symbol)
         info = t.info
-        if not info: return {"業種": "不明", "PER": "N/A", "PBR": "N/A", "ROE": "N/A"}
+        
+        # 各項目を取得し、データがない場合は None を返すように徹底
+        sector = info.get('sector') or info.get('industry') or "不明"
+        per = info.get('trailingPE') or info.get('forwardPE')
+        pbr = info.get('priceToBook')
+        roe = info.get('returnOnEquity')
+        
         return {
-            "業種": info.get('sector', '不明'),
-            "PER": info.get('trailingPE', info.get('forwardPE', 'N/A')),
-            "PBR": info.get('priceToBook', 'N/A'),
-            "ROE": info.get('returnOnEquity', 'N/A')
+            "業種": sector,
+            "PER": per,
+            "PBR": pbr,
+            "ROE": roe
         }
     except:
-        return {"業種": "取得不可", "PER": "N/A", "PBR": "N/A", "ROE": "N/A"}
+        return {"業種": "取得エラー", "PER": None, "PBR": None, "ROE": None}
 
 # --- 6. バックテスト ---
 def run_backtest(df):
@@ -95,7 +101,7 @@ def run_backtest(df):
             t_rev.append((d['Close'] / p_rev) - 1)
     return t_trend, t_rev
 
-# --- 7. 銘柄リスト (225銘柄) ---
+# --- 7. 銘柄リスト ---
 COMPANY_DICT = {
     "極洋": "1301", "ニッスイ": "1332", "マルハニチロ": "1333", "INPEX": "1605", "大成建設": "1801",
     "大林組": "1802", "清水建設": "1803", "鹿島建設": "1812", "大和ハウス": "1925", "積水ハウス": "1928",
@@ -145,7 +151,7 @@ COMPANY_DICT = {
 # --- サイドバー ---
 st.sidebar.header("🔍 銘柄選択")
 company_names = sorted(list(COMPANY_DICT.keys()))
-selected_name = st.sidebar.selectbox("銘柄名を入力（例：三菱）", options=company_names, index=company_names.index("三菱商事"))
+selected_name = st.sidebar.selectbox("銘柄名を選択", options=company_names, index=company_names.index("三菱商事"))
 ticker_input = COMPANY_DICT[selected_name]
 
 # --- メインコンテンツ ---
@@ -157,6 +163,8 @@ with tab1:
     
     if df is not None:
         latest, prev = df.iloc[-1], df.iloc[-2]
+        
+        # 判定ロジック
         sig = "🟢 待機"
         if latest['Uptrend'] and latest['Close'] > latest['SMA200'] and prev['High'] >= prev['High20'] and latest['Low'] <= latest['SMA5']:
             sig = "🔥 【順張り】買いシグナル！"
@@ -164,43 +172,69 @@ with tab1:
             sig = "🚨 【逆張り】買いシグナル！"
             
         st.subheader(f"判定：{sig}")
+        
+        # 基本指標表示
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("現在値", f"¥{latest['Close']:,.1f}")
         col2.metric("RSI(14)", f"{latest['RSI14']:.1f}")
-        col3.metric("日経トレンド", "上昇 📈" if latest['Uptrend'] else "下落 📉")
+        col3.metric("市場トレンド", "上昇 📈" if latest['Uptrend'] else "下落 📉")
         col4.metric("200日線", "上" if latest['Close'] > latest['SMA200'] else "下")
 
+        # 企業情報セクション（ここをエラーに強く修正）
+        st.write("---")
         st.markdown(f"### 🏢 企業情報・ファンダメンタルズ")
         f1, f2, f3, f4 = st.columns(4)
-        f1.write(f"**業種:** {fundamentals['業種']}")
         
-        # 数値かどうか判定して安全に表示
-        def safe_format(val, unit, digits=1):
-            if isinstance(val, (int, float)):
-                return f"{val:.{digits}f} {unit}"
-            return "N/A"
-
-        f2.write(f"**PER:** {safe_format(fundamentals['PER'], '倍')}")
-        f3.write(f"**PBR:** {safe_format(fundamentals['PBR'], '倍', 2)}")
+        # 業種
+        f1.write(f"**業種:**\n{fundamentals['業種']}")
         
+        # PER
+        per_val = fundamentals['PER']
+        per_text = f"{per_val:.1f} 倍" if isinstance(per_val, (int, float)) else "N/A"
+        f2.write(f"**PER:**\n{per_text}")
+        
+        # PBR
+        pbr_val = fundamentals['PBR']
+        pbr_text = f"{pbr_val:.2f} 倍" if isinstance(pbr_val, (int, float)) else "N/A"
+        f3.write(f"**PBR:**\n{pbr_text}")
+        
+        # ROE
         roe_val = fundamentals['ROE']
-        roe_display = f"{roe_val*100:.1f} %" if isinstance(roe_val, (int, float)) else "N/A"
-        f4.write(f"**ROE:** {roe_display}")
+        roe_text = f"{roe_val * 100:.1f} %" if isinstance(roe_val, (int, float)) else "N/A"
+        f4.write(f"**ROE:**\n{roe_text}")
         
-        if st.button("📱 分析結果をLINEに送る"):
-            msg = f"【判定】{selected_name}\n結果: {sig}\n株価: {latest['Close']:,.0f}円\n業種: {fundamentals['業種']}\nPER: {safe_format(fundamentals['PER'], '倍')}\nROE: {roe_display}"
-            send_line_notification(msg)
-
+        # --- バックテスト詳細 ---
         st.divider()
         t_trend, t_rev = run_backtest(df)
-        st.subheader("📈 バックテスト結果（過去5年）")
+        st.subheader("📈 過去5年間のバックテスト成績")
+        
         c1, c2 = st.columns(2)
         with c1:
-            if t_trend: st.write(f"順張り勝率: **{len([x for x in t_trend if x > 0])/len(t_trend)*100:.1f}%**")
-            else: st.write("データなし")
+            st.markdown("#### 🔥 順張り（押し目買い）")
+            if t_trend:
+                wr = len([x for x in t_trend if x > 0]) / len(t_trend) * 100
+                ar = np.mean(t_trend) * 100
+                m1, m2, m3 = st.columns(3)
+                m1.metric("回数", f"{len(t_trend)}回")
+                m2.metric("勝率", f"{wr:.1f}%")
+                m3.metric("平均利回り", f"{ar:+.2f}%")
+            else: st.info("一致なし")
+                
         with c2:
-            if t_rev: st.write(f"逆張り勝率: **{len([x for x in t_rev if x > 0])/len(t_rev)*100:.1f}%**")
-            else: st.write("データなし")
+            st.markdown("#### 🚨 逆張り（リバウンド）")
+            if t_rev:
+                wr = len([x for x in t_rev if x > 0]) / len(t_rev) * 100
+                ar = np.mean(t_rev) * 100
+                m1, m2, m3 = st.columns(3)
+                m1.metric("回数", f"{len(t_rev)}回")
+                m2.metric("勝率", f"{wr:.1f}%")
+                m3.metric("平均利回り", f"{ar:+.2f}%")
+            else: st.info("一致なし")
+
+        if st.button("📱 LINEに送信"):
+            line_msg = f"【判定】{selected_name}\n判定: {sig}\n価格: {latest['Close']:,.0f}円\nPER: {per_text} / ROE: {roe_text}"
+            send_line_notification(line_msg)
+
     else:
         st.error("データ読み込みエラー：銘柄データが取得できません。")
 
@@ -225,6 +259,6 @@ with tab2:
             except: continue
         pb.empty()
         if hits:
-            st.success(f"🎉 {len(hits)} 銘柄が条件に一致しました！")
+            st.success(f"🎉 {len(hits)} 銘柄が一致！")
             st.table(pd.DataFrame(hits))
-        else: st.info("本日のシグナルはありません。")
+        else: st.info("本日はシグナルはありません。")
