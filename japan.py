@@ -141,4 +141,43 @@ if df is not None:
     elif latest['Close'] > latest['SMA200'] and latest['RSI14'] < 30 and latest['Close'] < latest['BB_Lower']:
         signal_msg = "🚨 【逆張り】パニック売られすぎ！リバウンド買いシグナル！"
 
-    st.markdown(f"### 🎯 本日の
+    st.markdown(f"### 🎯 本日のアクション：**{signal_msg}**")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("現在値", f"¥{latest['Close']:.1f}")
+    col2.metric("日経平均トレンド", "上昇中 📈" if latest['Uptrend'] else "下落中 📉")
+    col3.metric("RSI (14日)", f"{latest['RSI14']:.1f}", "30以下で売られすぎ")
+    col4.metric("200日線との関係", "上（長期強気）" if latest['Close'] > latest['SMA200'] else "下（長期弱気）")
+    
+    st.divider()
+    t_trend, t_rev = run_backtest(df)
+    st.subheader("📈 過去5年間のバックテスト成績")
+    
+    tab1, tab2 = st.tabs(["🔥 順張り（ブレイク＆押し目）", "🚨 逆張り（リバウンド狙い）"])
+    
+    with tab1:
+        st.write("【出口戦略】3日間安値を下回るまでホールド（トレイリングストップ）")
+        if len(t_trend) > 0:
+            win_rate = len([x for x in t_trend if x > 0]) / len(t_trend) * 100
+            avg_return = np.mean(t_trend) * 100
+            c1, c2, c3 = st.columns(3)
+            c1.metric("トレード回数", f"{len(t_trend)} 回")
+            c2.metric("勝率", f"{win_rate:.1f} %")
+            c3.metric("1回あたりの平均利益", f"{avg_return:.2f} %")
+        else:
+            st.write("過去5年間で条件に一致するトレードはありませんでした。")
+            
+    with tab2:
+        st.write("【出口戦略】RSI70で利確 / -5%で損切")
+        if len(t_rev) > 0:
+            win_rate = len([x for x in t_rev if x > 0]) / len(t_rev) * 100
+            avg_return = np.mean(t_rev) * 100
+            c1, c2, c3 = st.columns(3)
+            c1.metric("トレード回数", f"{len(t_rev)} 回")
+            c2.metric("勝率", f"{win_rate:.1f} %")
+            c3.metric("1回あたりの平均利益", f"{avg_return:.2f} %")
+        else:
+            st.write("過去5年間で条件に一致するトレードはありませんでした。")
+
+else:
+    st.error("データを取得できませんでした。証券コードを確認するか、時間を置いて再試行してください。")
