@@ -22,26 +22,13 @@ def send_line_notification(message):
         requests.post(url, headers=headers, json=data)
     except: pass
 
-# --- 3. 【最重要】Yahoo!ファイナンス エラー回避セッション ---
-# これが「Too Many Requests」を防ぐための魔法のパスポートです
-def get_safe_session():
-    session = requests.Session()
-    # 一般的なブラウザ（Chrome）からのアクセスだと偽装する
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    })
-    return session
-
-# --- 4. データ取得関数（パスポート付き） ---
+# --- 3. データ取得関数（yfinanceの標準偽装システムにお任せ） ---
 @st.cache_data(ttl=3600)
 def load_us_data(ticker_symbol):
     try:
-        safe_session = get_safe_session()
-        
-        # 恐怖指数（VIX）の取得
-        vix_data = yf.Ticker("^VIX", session=safe_session).history(period="5y")
-        # 個別株（TQQQなど）の取得
-        df_data = yf.Ticker(ticker_symbol, session=safe_session).history(period="5y")
+        # カスタムセッションを廃止し、yfinance自身の強力なスクレイピング回避（curl_cffi）を使用
+        vix_data = yf.Ticker("^VIX").history(period="5y")
+        df_data = yf.Ticker(ticker_symbol).history(period="5y")
         
         if df_data.empty or vix_data.empty: 
             return None, None
@@ -68,17 +55,17 @@ def load_us_data(ticker_symbol):
         st.error(f"データ取得エラー: {e}")
         return None, None
 
-# --- 5. TQQQ専用判定ロジック関数 ---
+# --- 4. TQQQ専用判定ロジック関数 ---
 def get_tqqq_signal(latest, prev):
-    # ① 🚨 大暴落キャッチ（全力買い）: VIX 30以上 ＆ 株価が200日線から-20%以上乖離
+    # ① 🚨 大暴落キャッチ（全力買い）
     if latest['VIX'] >= 30 and latest['Close'] < (latest['SMA200'] * 0.8):
         return "🚨 大暴落キャッチ（全力買い）", "今すぐ全力買い・ナンピンのタイミングです"
         
-    # ② 🔴 トレイリングストップ（即撤退・損切り）: 直近20日高値から -25% 下落
+    # ② 🔴 トレイリングストップ（即撤退・損切り）
     elif latest['Drawdown_from_High20'] <= -0.25:
         return "🔴 トレイリングストップ", "直近高値から25%下落。即撤退・損切り推奨です"
         
-    # ③ 🔥 爆速買い戻し（強気トレンド入り）: 前日25日線以下 → 本日25日線上抜け
+    # ③ 🔥 爆速買い戻し（強気トレンド入り）
     elif prev['Close'] <= prev['SMA25'] and latest['Close'] > latest['SMA25']:
         return "🔥 爆速買い戻し", "上昇トレンド入り（ゴールデンクロス）。買い戻し推奨です"
         
@@ -86,8 +73,7 @@ def get_tqqq_signal(latest, prev):
     else:
         return "🟢 待機", "現状維持・継続ホールド"
 
-
-# --- 6. 主要米国銘柄リスト ---
+# --- 5. 主要米国銘柄リスト ---
 US_TICKERS = {
     "TQQQ (ナスダック3倍ブル)": "TQQQ",
     "SOXL (半導体3倍ブル)": "SOXL",
@@ -153,4 +139,4 @@ if df is not None:
         st.success("LINEに通知を送信しました！")
 
 else:
-    st.warning("現在、Yahoo Finance側の制限によりデータが取得できません。数十秒待ってからリロードしてください。")
+    st.warning("現在、データの取得に失敗しました。少し時間をおいてからリロードしてください。")
