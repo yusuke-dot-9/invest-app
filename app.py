@@ -22,7 +22,7 @@ def send_line_notification(message):
         requests.post(url, headers=headers, json=data)
     except: pass
 
-# --- 3. データ取得関数（株価データ） ---
+# --- 3. データ取得関数 ---
 @st.cache_data(ttl=3600)
 def load_us_data(ticker_symbol):
     try:
@@ -52,11 +52,11 @@ def load_us_data(ticker_symbol):
     except Exception as e:
         return None, None
 
-# --- 4. 【新機能】純利益成長率の取得（キーワード探索つき） ---
+# --- 4. 【最強版】ファンダメンタル成長率の取得（純利益→営業利益→売上高） ---
 @st.cache_data(ttl=86400)
-def get_net_income_growth(ticker_symbol):
+def get_fundamental_growth(ticker_symbol):
     if ticker_symbol in ["TQQQ", "SOXL", "QQQ", "SPY"]:
-        return None, None
+        return None, None, None
     
     try:
         t = yf.Ticker(ticker_symbol)
@@ -64,45 +64,44 @@ def get_net_income_growth(ticker_symbol):
         if inc is None or inc.empty:
             inc = t.financials
         if inc is None or inc.empty:
-            return None, None
+            return None, None, None
             
-        # 💡 "net income" という文字が含まれる行を探し出す
-        target_row = None
-        for row_name in inc.index:
-            if isinstance(row_name, str) and 'net income' in row_name.lower():
-                # 「Common（普通株式）」があれば優先する
-                if 'common' in row_name.lower() or target_row is None:
-                    target_row = row_name
-                    
-        # 見つからなかった場合はEPS（1株あたり利益）で代用
-        if target_row is None:
+        # 探す項目の優先順位を設定（純利益が赤字なら、売上高を探す）
+        targets = [
+            {"name": "純利益", "keywords": ["net income common", "net income"]},
+            {"name": "営業利益", "keywords": ["operating income", "ebit"]},
+            {"name": "売上高", "keywords": ["total revenue", "revenue"]}
+        ]
+        
+        for target in targets:
+            target_row = None
             for row_name in inc.index:
-                if isinstance(row_name, str) and 'eps' in row_name.lower():
-                    target_row = row_name
+                row_lower = str(row_name).lower()
+                for kw in target["keywords"]:
+                    if kw in row_lower:
+                        target_row = row_name
+                        break
+                if target_row:
                     break
                     
-        if target_row is None:
-            return None, None
-            
-        ni_series = inc.loc[target_row].dropna()
-        
-        if len(ni_series) < 2:
-            return None, None
-            
-        latest_ni = float(ni_series.iloc[0])
-        oldest_ni = float(ni_series.iloc[-1])
-        
-        if oldest_ni <= 0: return None, None
-            
-        ni_growth = (latest_ni / oldest_ni) - 1
-        
-        # 何回分（何年分）のデータが取れたか（最大4）
-        years_count = len(ni_series) 
-        return ni_growth, years_count
+            if target_row:
+                series = inc.loc[target_row].dropna()
+                if len(series) >= 2:
+                    latest_val = float(series.iloc[0])
+                    oldest_val = float(series.iloc[-1])
+                    
+                    # 過去が赤字、または最新が赤字の場合はパーセンテージ計算できないため、次の指標へ
+                    if oldest_val <= 0 or latest_val <= 0:
+                        continue
+                        
+                    growth = (latest_val / oldest_val) - 1
+                    return growth, len(series), target["name"]
+                    
+        return None, None, None
     except:
-        return None, None
+        return None, None, None
 
-# --- 5. TQQQ・米国株専用判定ロジック関数 ---
+# --- 5. 判定ロジック ---
 def get_tqqq_signal(latest, prev):
     if latest['VIX'] >= 30 and latest['Close'] < (latest['SMA200'] * 0.8):
         return "🚨 大暴落キャッチ（全力買い）", "今すぐ全力買い・ナンピンのタイミングです"
@@ -113,7 +112,7 @@ def get_tqqq_signal(latest, prev):
     else:
         return "🟢 待機", "現状維持・継続ホールド"
 
-# --- 6. 米国株＆FANG+ 銘柄リスト ---
+# --- 6. 銘柄リスト ---
 US_TICKERS = {
     "TQQQ (ナスダック3倍ブル)": "TQQQ",
     "SOXL (半導体3倍ブル)": "SOXL",
@@ -164,39 +163,42 @@ if df is not None:
 
     st.write("---")
 
-    # --- 株価 vs 純利益 の乖離率チェック（期間アジャスト機能搭載） ---
-    st.markdown("### 🏢 株価成長 vs 純利益成長（ファンダメンタル乖離率）")
+    # --- 株価 vs 成長率 の乖離率チェック（オートチェンジ搭載） ---
+    st.markdown("### 🏢 株価成長 vs 企業成長（ファンダメンタル乖離率）")
     if ticker_code in ["TQQQ", "SOXL", "QQQ", "SPY"]:
-        st.write("※ETF（指数）のため、純利益データはありません。")
+        st.write("※ETF（指数）のため、企業業績データはありません。")
     else:
-        ni_growth, years_count = get_net_income_growth(ticker_code)
+        growth_rate, years_count, metric_name = get_fundamental_growth(ticker_code)
         
-        if ni_growth is not None:
-            # 💡 利益データが取れた年数（最大4年）に合わせて、株価の期間も自動調整
-            # years_count が4の場合、実質3年前からの成長なので約252日×3を遡る
+        if growth_rate is not None:
+            # 取得できた年数に合わせて、株価も同じ期間で比較
             lookback_days = min(len(df)-1, int(252 * (years_count - 1)))
             price_old = df['Close'].iloc[-(lookback_days + 1)]
             price_new = latest['Close']
             price_growth = (price_new / price_old) - 1
             
-            divergence = price_growth - ni_growth
+            divergence = price_growth - growth_rate
             
             c1, c2, c3 = st.columns(3)
             c1.metric(f"過去{years_count}年の株価上昇率", f"{price_growth*100:+.1f}%")
-            c2.metric(f"過去{years_count}年の純利益成長率", f"{ni_growth*100:+.1f}%")
+            # 💡 「純利益」か「売上高」か、取得した項目名を自動表示！
+            c2.metric(f"過去{years_count}年の{metric_name}成長率", f"{growth_rate*100:+.1f}%")
             
             if divergence > 0.5:
                 div_status = "⚠️ 期待先行（株価上がりすぎ）"
             elif divergence < -0.2:
-                div_status = "✨ 超割安（利益に株価が追いついていない）"
+                div_status = "✨ 超割安（業績に株価が追いついてない）"
             else:
-                div_status = "🟢 適正水準（利益と株価が連動）"
+                div_status = "🟢 適正水準（業績と株価が連動）"
                 
-            c3.metric("乖離率（株価上昇分 - 利益成長分）", f"{divergence*100:+.1f} pt", div_status)
+            c3.metric(f"乖離率（株価 - {metric_name}）", f"{divergence*100:+.1f} pt", div_status)
             
-            st.caption(f"※Yahoo Financeの仕様により、決算データは最大4年分となります。より正確に比較するため、株価上昇率も純利益と同じ過去{years_count}年間のデータに揃えて計算しています。")
+            if metric_name != "純利益":
+                st.info(f"💡 **AI分析コメント:** {ticker_code} は過去に純利益が赤字（または計算不可）の期間があるため、より正確に企業の成長を測る指標として自動的に **「{metric_name}成長率」** に切り替えて比較しました。")
+                
+            st.caption(f"※Yahoo Financeの仕様により決算データは最大4年分となります。より正確に比較するため、株価上昇率も業績と同じ過去{years_count}年間のデータに揃えて計算しています。")
         else:
-            st.warning("現在、純利益データを取得できませんでした。時間をおいて再試行するか、公式ページでご確認ください。")
+            st.warning("現在、業績データを取得できませんでした。時間をおいて再試行するか、公式ページでご確認ください。")
 
     st.write("---")
     official_url = f"https://finance.yahoo.com/quote/{ticker_code}"
