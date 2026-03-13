@@ -160,8 +160,8 @@ with tab1:
         st.write("---")
         st.markdown(f"### 🏢 {selected_name} の詳細な企業情報（PER・ROEなど）")
         st.write("※データ取得エラーを防ぐため、最新の財務データは公式ページから直接確認してください。")
-        
-        official_url = f"https://finance.yahoo.co.jp/quote/{ticker_code}.T/fundamental"
+       
+        official_url = f"https://finance.yahoo.co.jp/quote/{ticker_code}.T"
         st.link_button(f"🔗 {selected_name} のPER・PBR・ROEを公式で確認する", official_url)
 
         # --- バックテスト成績 ---
