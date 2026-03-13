@@ -1,6 +1,6 @@
 streamlit
-yfinance
+yfinance>=0.2.40
 pandas
 numpy
 requests
-curl_cffi
+curl_cffi>=0.6.2
