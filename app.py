@@ -29,8 +29,7 @@ def load_us_data(ticker_symbol):
         vix_data = yf.download("^VIX", period="5y", progress=False)
         df_data = yf.download(ticker_symbol, period="5y", progress=False)
         
-        if df_data.empty or vix_data.empty: 
-            return None, None
+        if df_data.empty or vix_data.empty: return None, None
             
         if isinstance(df_data.columns, pd.MultiIndex):
             df_data.columns = df_data.columns.get_level_values(0)
@@ -49,12 +48,11 @@ def load_us_data(ticker_symbol):
         df['Drawdown_from_High20'] = (df['Close'] - df['High20']) / df['High20']
         
         df = df.join(vix, how='left').ffill()
-        
         return df, ticker_symbol
     except Exception as e:
         return None, None
 
-# --- 4. 【修正】純利益成長率の取得（賢い探索機能つき） ---
+# --- 4. 【新機能】純利益成長率の取得（キーワード探索つき） ---
 @st.cache_data(ttl=86400)
 def get_net_income_growth(ticker_symbol):
     if ticker_symbol in ["TQQQ", "SOXL", "QQQ", "SPY"]:
@@ -63,43 +61,44 @@ def get_net_income_growth(ticker_symbol):
     try:
         t = yf.Ticker(ticker_symbol)
         inc = t.income_stmt
-        
-        # income_stmtが空っぽの場合は financials を代用
         if inc is None or inc.empty:
             inc = t.financials
-            
         if inc is None or inc.empty:
             return None, None
             
-        # 💡 企業によって異なる「純利益」のラベル表記を片っ端から探す
-        ni_labels_to_try = [
-            "Net Income", 
-            "Net Income Common Stockholders", 
-            "Net Income From Continuing And Discontinued Operation",
-            "Normalized Income",
-            "Basic EPS" # 最悪EPS（1株あたり利益）で代用
-        ]
-        
-        ni_series = None
-        for label in ni_labels_to_try:
-            if label in inc.index:
-                ni_series = inc.loc[label].dropna()
-                if not ni_series.empty:
-                    break # 見つけたら探索終了
+        # 💡 "net income" という文字が含まれる行を探し出す
+        target_row = None
+        for row_name in inc.index:
+            if isinstance(row_name, str) and 'net income' in row_name.lower():
+                # 「Common（普通株式）」があれば優先する
+                if 'common' in row_name.lower() or target_row is None:
+                    target_row = row_name
                     
-        if ni_series is None or len(ni_series) < 2:
+        # 見つからなかった場合はEPS（1株あたり利益）で代用
+        if target_row is None:
+            for row_name in inc.index:
+                if isinstance(row_name, str) and 'eps' in row_name.lower():
+                    target_row = row_name
+                    break
+                    
+        if target_row is None:
             return None, None
             
-        # yfinanceは左側が最新の年なので、[0]が最新、[-1]が最古
+        ni_series = inc.loc[target_row].dropna()
+        
+        if len(ni_series) < 2:
+            return None, None
+            
         latest_ni = float(ni_series.iloc[0])
         oldest_ni = float(ni_series.iloc[-1])
         
-        # 過去が赤字（マイナス）だとパーセンテージ成長率がバグるため除外
-        if oldest_ni <= 0: 
-            return None, None
+        if oldest_ni <= 0: return None, None
             
         ni_growth = (latest_ni / oldest_ni) - 1
-        return ni_growth, len(ni_series)
+        
+        # 何回分（何年分）のデータが取れたか（最大4）
+        years_count = len(ni_series) 
+        return ni_growth, years_count
     except:
         return None, None
 
@@ -120,6 +119,7 @@ US_TICKERS = {
     "SOXL (半導体3倍ブル)": "SOXL",
     "QQQ (ナスダック100)": "QQQ",
     "SPY (S&P500)": "SPY",
+    "--- FANG+ 構成銘柄 ---": "",
     "NVDA (エヌビディア)": "NVDA",
     "AAPL (アップル)": "AAPL",
     "MSFT (マイクロソフト)": "MSFT",
@@ -135,7 +135,8 @@ US_TICKERS = {
 
 # --- サイドバー ---
 st.sidebar.header("🔍 米国銘柄選択")
-selected_name = st.sidebar.selectbox("銘柄名を選択", options=list(US_TICKERS.keys()))
+valid_options = [k for k in US_TICKERS.keys() if US_TICKERS[k] != ""]
+selected_name = st.sidebar.selectbox("銘柄名を選択", options=valid_options)
 ticker_code = US_TICKERS[selected_name]
 
 # --- メインコンテンツ ---
@@ -163,25 +164,27 @@ if df is not None:
 
     st.write("---")
 
-    # --- 株価 vs 純利益 の乖離率チェック ---
+    # --- 株価 vs 純利益 の乖離率チェック（期間アジャスト機能搭載） ---
     st.markdown("### 🏢 株価成長 vs 純利益成長（ファンダメンタル乖離率）")
     if ticker_code in ["TQQQ", "SOXL", "QQQ", "SPY"]:
         st.write("※ETF（指数）のため、純利益データはありません。")
     else:
-        price_old = df['Close'].iloc[0]
-        price_new = latest['Close']
-        price_growth = (price_new / price_old) - 1
-        
-        ni_growth, years = get_net_income_growth(ticker_code)
+        ni_growth, years_count = get_net_income_growth(ticker_code)
         
         if ni_growth is not None:
+            # 💡 利益データが取れた年数（最大4年）に合わせて、株価の期間も自動調整
+            # years_count が4の場合、実質3年前からの成長なので約252日×3を遡る
+            lookback_days = min(len(df)-1, int(252 * (years_count - 1)))
+            price_old = df['Close'].iloc[-(lookback_days + 1)]
+            price_new = latest['Close']
+            price_growth = (price_new / price_old) - 1
+            
             divergence = price_growth - ni_growth
             
             c1, c2, c3 = st.columns(3)
-            c1.metric("過去5年の株価上昇率", f"{price_growth*100:+.1f}%")
-            c2.metric(f"過去{years}年の純利益成長率", f"{ni_growth*100:+.1f}%")
+            c1.metric(f"過去{years_count}年の株価上昇率", f"{price_growth*100:+.1f}%")
+            c2.metric(f"過去{years_count}年の純利益成長率", f"{ni_growth*100:+.1f}%")
             
-            div_color = "normal"
             if divergence > 0.5:
                 div_status = "⚠️ 期待先行（株価上がりすぎ）"
             elif divergence < -0.2:
@@ -191,7 +194,7 @@ if df is not None:
                 
             c3.metric("乖離率（株価上昇分 - 利益成長分）", f"{divergence*100:+.1f} pt", div_status)
             
-            st.caption("※乖離率が大きなプラスの場合は「バブル・期待先行」、マイナスの場合は「割安・出遅れ」の可能性があります。")
+            st.caption(f"※Yahoo Financeの仕様により、決算データは最大4年分となります。より正確に比較するため、株価上昇率も純利益と同じ過去{years_count}年間のデータに揃えて計算しています。")
         else:
             st.warning("現在、純利益データを取得できませんでした。時間をおいて再試行するか、公式ページでご確認ください。")
 
