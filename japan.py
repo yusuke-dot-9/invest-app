@@ -24,7 +24,6 @@ def send_line_notification(message):
     except: pass
 
 # --- 3. ポートフォリオ（保有銘柄）の保存機能 ---
-# データが消えないようにCSVファイルに記録します
 PORTFOLIO_FILE = "portfolio.csv"
 
 def load_portfolio():
@@ -44,7 +43,7 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 5. データ取得関数（超高速版） ---
+# --- 5. データ取得関数 ---
 @st.cache_data(ttl=3600)
 def load_data(ticker_symbol):
     if not ticker_symbol.endswith('.T'): ticker_symbol = f"{ticker_symbol}.T"
@@ -228,7 +227,6 @@ with tab3:
     st.markdown("### 💼 保有銘柄の利確・損切り判定")
     st.write("購入した銘柄を登録すると、毎日の株価と「買った手法」に基づき、自動で出口戦略（利確・損切りの指示）を判定します。")
     
-    # 登録フォーム
     with st.expander("➕ 新しく購入した銘柄を登録する", expanded=False):
         with st.form("add_portfolio_form"):
             col1, col2, col3, col4 = st.columns(4)
@@ -237,7 +235,8 @@ with tab3:
             with col2:
                 p_price = st.number_input("買値 (円)", min_value=1.0, value=1000.0, step=10.0)
             with col3:
-                p_qty = st.number_input("株数", min_value=1, value=100, step=100)
+                # 💡 ここを「1株単位」で入力できるように修正しました！
+                p_qty = st.number_input("株数 (ミニカブ対応)", min_value=1, value=1, step=1)
             with col4:
                 p_strategy = st.selectbox("エントリー手法", options=["新高値ブレイク(順張り)", "バリュー初動(逆張り)"])
             
@@ -253,7 +252,6 @@ with tab3:
                 st.success(f"{p_name} をポートフォリオに追加しました！")
                 st.rerun()
 
-    # 保有銘柄一覧と自動判定
     pf_df = load_portfolio()
     if pf_df.empty:
         st.info("現在、登録されている保有銘柄はありません。上のフォームから追加してください。")
@@ -273,7 +271,6 @@ with tab3:
                 profit_amount = (current_price - buy_price) * row["株数"]
                 strategy = row["戦略"]
                 
-                # --- 自動出口判定ロジック ---
                 action = "🟢 ホールド（利益拡大中）"
                 
                 if strategy == "新高値ブレイク(順張り)":
@@ -302,7 +299,6 @@ with tab3:
             res_df = pd.DataFrame(results)
             st.dataframe(res_df, use_container_width=True)
             
-            # 売却済み銘柄の削除機能
             st.markdown("---")
             del_name = st.selectbox("決済済みの銘柄をポートフォリオから削除", options=pf_df["銘柄名"].tolist())
             if st.button("この銘柄を削除"):
