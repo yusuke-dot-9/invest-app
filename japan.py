@@ -30,7 +30,7 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 4. 株価データ取得（チャートデータは安定しています） ---
+# --- 4. 株価データ取得 ---
 @st.cache_data(ttl=3600)
 def load_data(ticker_symbol):
     if not ticker_symbol.endswith('.T'): ticker_symbol = f"{ticker_symbol}.T"
@@ -42,18 +42,19 @@ def load_data(ticker_symbol):
         df = df_data[['Open', 'High', 'Low', 'Close']].dropna()
         nk_df = pd.DataFrame({'Close': nk225['Close']}).dropna()
         
+        # 指標の計算
         nk_df['SMA25'] = nk_df['Close'].rolling(window=25).mean()
         nk_df['SMA75'] = nk_df['Close'].rolling(window=75).mean()
         nk_df['Uptrend'] = nk_df['SMA25'] > nk_df['SMA75']
         
         df['SMA5'] = df['Close'].rolling(window=5).mean()
-        df['SMA20'] = df['Close'].rolling(window=20).mean()
+        df['SMA25'] = df['Close'].rolling(window=25).mean()
         df['SMA200'] = df['Close'].rolling(window=200).mean()
-        df['High20'] = df['High'].rolling(window=20).max()
-        df['Low3'] = df['Low'].rolling(window=3).min().shift(1)
+        
+        # 新ロジック用：過去200日間の最高値（前日まで）
+        df['High200_prev'] = df['High'].rolling(window=200).max().shift(1)
+        
         df['RSI14'] = calculate_rsi(df['Close'], 14)
-        std20 = df['Close'].rolling(window=20).std()
-        df['BB_Lower'] = df['SMA20'] - (2 * std20)
         
         df.index = df.index.tz_localize(None)
         nk_df.index = nk_df.index.tz_localize(None)
@@ -62,34 +63,40 @@ def load_data(ticker_symbol):
     except:
         return None, None
 
-# --- 5. バックテスト計算 ---
+# --- 5. 新バックテスト計算 ---
 def run_backtest(df):
     t_trend, t_rev = [], []
     in_trend, in_rev = False, False
     p_trend, p_rev = 0, 0
-    # 200日移動平均線を計算するため、最初の200日はスキップ
+    
     for i in range(200, len(df)):
         d, y = df.iloc[i], df.iloc[i-1]
         
-        # 順張り
+        # 【新・順張り】新高値ブレイクアウト
         if not in_trend:
-            if d['Uptrend'] and d['Close'] > d['SMA200'] and y['High'] >= y['High20'] and d['Low'] <= d['SMA5']:
+            # 今日の終値が過去200日の最高値を更新したらエントリー
+            if d['Close'] > d['High200_prev']:
                 in_trend, p_trend = True, d['Close']
-        elif d['Close'] < d['Low3']:
-            in_trend = False
-            t_trend.append((d['Close'] / p_trend) - 1)
-            
-        # 逆張り
+        else:
+            # 決済：25日線を下回るか、エントリーから-5%で損切り
+            if d['Close'] < d['SMA25'] or d['Close'] < p_trend * 0.95:
+                in_trend = False
+                t_trend.append((d['Close'] / p_trend) - 1)
+                
+        # 【新・逆張り】バリューモメンタム（200日線突破）
         if not in_rev:
-            if d['Close'] > d['SMA200'] and d['RSI14'] < 30 and d['Close'] < d['BB_Lower']:
+            # 前日は200日線以下で、今日200日線を上抜けた瞬間（初動）
+            if d['Close'] > d['SMA200'] and y['Close'] <= y['SMA200']:
                 in_rev, p_rev = True, d['Close']
-        elif d['RSI14'] > 70 or d['Close'] <= p_rev * 0.95:
-            in_rev = False
-            t_rev.append((d['Close'] / p_rev) - 1)
-            
+        else:
+            # 決済：再び200日線を割るか、+20%の利益到達で利確
+            if d['Close'] < d['SMA200'] * 0.98 or d['Close'] > p_rev * 1.20:
+                in_rev = False
+                t_rev.append((d['Close'] / p_rev) - 1)
+                
     return t_trend, t_rev
 
-# --- 6. 日経225 全225銘柄リスト（完全ハードコード版・エラー率0%） ---
+# --- 6. 日経225 全銘柄リスト ---
 COMPANY_DICT = {
     "ニッスイ": "1332", "マルハニチロ": "1333", "INPEX": "1605", "大成建設": "1801", "大林組": "1802", "清水建設": "1803", "長谷工コーポレーション": "1808", "鹿島": "1812", 
     "大和ハウス工業": "1925", "積水ハウス": "1928", "日揮HD": "1963", "日清製粉グループ本社": "2002", "双日": "2768", "アルフレッサHD": "2784", "味の素": "2802", 
@@ -140,38 +147,36 @@ with tab1:
     if df is not None:
         latest, prev = df.iloc[-1], df.iloc[-2]
         
-        # 判定ロジック
+        # --- 新しい判定ロジック ---
         sig = "🟢 待機"
-        if latest['Uptrend'] and latest['Close'] > latest['SMA200'] and prev['High'] >= prev['High20'] and latest['Low'] <= latest['SMA5']:
-            sig = "🔥 【順張り】買いシグナル！"
-        elif latest['Close'] > latest['SMA200'] and latest['RSI14'] < 30 and latest['Close'] < latest['BB_Lower']:
-            sig = "🚨 【逆張り】買いシグナル！"
+        if latest['Close'] > latest['High200_prev']:
+            sig = "🔥 【新高値ブレイク】最強順張りシグナル！"
+        elif latest['Close'] > latest['SMA200'] and prev['Close'] <= prev['SMA200']:
+            sig = "🚨 【バリュー初動】200日線突破シグナル！"
             
         st.subheader(f"本日の判定：{sig}")
         
-        # 基本指標表示
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("現在値", f"¥{latest['Close']:,.1f}")
-        col2.metric("RSI(14)", f"{latest['RSI14']:.1f}")
+        col2.metric("過去200日最高値", f"¥{latest['High200_prev']:,.1f}")
         col3.metric("日経平均トレンド", "上昇 📈" if latest['Uptrend'] else "下落 📉")
         col4.metric("200日移動平均線", "上" if latest['Close'] > latest['SMA200'] else "下")
 
-        # --- エラー回避策：企業情報はYahooファイナンス公式へリンク ---
         st.write("---")
-        st.markdown(f"### 🏢 {selected_name} の詳細な企業情報（PER・ROEなど）")
-        st.write("※データ取得エラーを防ぐため、最新の財務データは公式ページから直接確認してください。")
-       
+        st.markdown(f"### 🏢 {selected_name} の財務データ（PBR・ROEの確認）")
+        st.write("※「バリュー初動」シグナルが出た場合、公式ページで**【PBR1.5倍割れ】かつ【ROE8%以上】**を満たしているか確認すると勝率が上がります。")
+        
+        # URLを修正済み（/fundamental を削除）
         official_url = f"https://finance.yahoo.co.jp/quote/{ticker_code}.T"
         st.link_button(f"🔗 {selected_name} のPER・PBR・ROEを公式で確認する", official_url)
 
-        # --- バックテスト成績 ---
         st.divider()
         t_trend, t_rev = run_backtest(df)
         st.subheader("📈 過去5年間のバックテスト成績")
         
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("#### 🔥 順張り（押し目買い）")
+            st.markdown("#### 🔥 新高値ブレイクアウト（順張り）")
             if t_trend:
                 wr = len([x for x in t_trend if x > 0]) / len(t_trend) * 100
                 ar = np.mean(t_trend) * 100
@@ -182,7 +187,7 @@ with tab1:
             else: st.info("過去5年で条件に一致した日はありません")
                 
         with c2:
-            st.markdown("#### 🚨 逆張り（リバウンド）")
+            st.markdown("#### 🚨 バリューモメンタム（逆張り/初動）")
             if t_rev:
                 wr = len([x for x in t_rev if x > 0]) / len(t_rev) * 100
                 ar = np.mean(t_rev) * 100
@@ -200,7 +205,7 @@ with tab1:
         st.error("データの取得に失敗しました。時間をおいて再試行してください。")
 
 with tab2:
-    st.markdown("日経225の全銘柄を一気に分析し、本日「買いシグナル」が点灯している銘柄を探し出します。")
+    st.markdown("新ロジック（新高値ブレイク＆バリュー初動）で225銘柄を一斉スキャンします。")
     if st.button("🚀 225銘柄を一斉スキャン開始"):
         hits = []
         pb = st.progress(0)
@@ -213,13 +218,14 @@ with tab2:
                 if sdf is not None:
                     l, p = sdf.iloc[-1], sdf.iloc[-2]
                     s = None
-                    if l['Uptrend'] and l['Close'] > l['SMA200'] and p['High'] >= p['High20'] and l['Low'] <= l['SMA5']:
-                        s = "順張り🔥"
-                    elif l['Close'] > l['SMA200'] and l['RSI14'] < 30 and l['Close'] < l['BB_Lower']:
-                        s = "逆張り🚨"
+                    
+                    # --- スキャン用 新判定ロジック ---
+                    if l['Close'] > l['High200_prev']:
+                        s = "ブレイクアウト🔥"
+                    elif l['Close'] > l['SMA200'] and p['Close'] <= p['SMA200']:
+                        s = "バリュー初動🚨"
                     
                     if s: hits.append({"銘柄": name, "判定": s, "現在値": f"¥{l['Close']:,.1f}"})
-                # スキャンを高速化しつつ、サーバーに優しくする絶妙な待機時間
                 time.sleep(0.01)
             except: 
                 continue
@@ -229,8 +235,6 @@ with tab2:
         if hits:
             st.success(f"🎉 {len(hits)} 銘柄でシグナルが点灯しています！")
             st.table(pd.DataFrame(hits))
-            
-            # まとめてLINEに送る機能も追加
             if st.button("📱 スキャン結果をLINEに一括送信"):
                 res_msg = "【本日のスキャン結果】\n" + "\n".join([f"・{h['銘柄']}({h['判定']})" for h in hits])
                 send_line_notification(res_msg)
