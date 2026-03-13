@@ -30,14 +30,22 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 4. 株価データ取得 ---
+# --- 4. データ取得関数（超高速の download コマンドに変更！） ---
 @st.cache_data(ttl=3600)
 def load_data(ticker_symbol):
     if not ticker_symbol.endswith('.T'): ticker_symbol = f"{ticker_symbol}.T"
     try:
-        nk225 = yf.Ticker("^N225").history(period="5y")
-        df_data = yf.Ticker(ticker_symbol).history(period="5y")
+        # Ticker().history() の代わりに軽量な yf.download() を使用
+        nk225 = yf.download("^N225", period="5y", progress=False)
+        df_data = yf.download(ticker_symbol, period="5y", progress=False)
+        
         if df_data.empty or nk225.empty: return None, None
+        
+        # yfinanceの最新仕様（マルチインデックス）に対応
+        if isinstance(df_data.columns, pd.MultiIndex):
+            df_data.columns = df_data.columns.get_level_values(0)
+        if isinstance(nk225.columns, pd.MultiIndex):
+            nk225.columns = nk225.columns.get_level_values(0)
         
         df = df_data[['Open', 'High', 'Low', 'Close']].dropna()
         nk_df = pd.DataFrame({'Close': nk225['Close']}).dropna()
@@ -56,11 +64,13 @@ def load_data(ticker_symbol):
         
         df['RSI14'] = calculate_rsi(df['Close'], 14)
         
+        # タイムゾーンを削除して結合
         df.index = df.index.tz_localize(None)
         nk_df.index = nk_df.index.tz_localize(None)
         df = df.join(nk_df[['Uptrend']], how='left').ffill()
         return df, ticker_symbol
-    except:
+    except Exception as e:
+        st.error(f"データ取得エラー詳細: {e}")
         return None, None
 
 # --- 5. 新バックテスト計算 ---
@@ -74,22 +84,18 @@ def run_backtest(df):
         
         # 【新・順張り】新高値ブレイクアウト
         if not in_trend:
-            # 今日の終値が過去200日の最高値を更新したらエントリー
             if d['Close'] > d['High200_prev']:
                 in_trend, p_trend = True, d['Close']
         else:
-            # 決済：25日線を下回るか、エントリーから-5%で損切り
             if d['Close'] < d['SMA25'] or d['Close'] < p_trend * 0.95:
                 in_trend = False
                 t_trend.append((d['Close'] / p_trend) - 1)
                 
         # 【新・逆張り】バリューモメンタム（200日線突破）
         if not in_rev:
-            # 前日は200日線以下で、今日200日線を上抜けた瞬間（初動）
             if d['Close'] > d['SMA200'] and y['Close'] <= y['SMA200']:
                 in_rev, p_rev = True, d['Close']
         else:
-            # 決済：再び200日線を割るか、+20%の利益到達で利確
             if d['Close'] < d['SMA200'] * 0.98 or d['Close'] > p_rev * 1.20:
                 in_rev = False
                 t_rev.append((d['Close'] / p_rev) - 1)
@@ -166,7 +172,6 @@ with tab1:
         st.markdown(f"### 🏢 {selected_name} の財務データ（PBR・ROEの確認）")
         st.write("※「バリュー初動」シグナルが出た場合、公式ページで**【PBR1.5倍割れ】かつ【ROE8%以上】**を満たしているか確認すると勝率が上がります。")
         
-        # URLを修正済み（/fundamental を削除）
         official_url = f"https://finance.yahoo.co.jp/quote/{ticker_code}.T"
         st.link_button(f"🔗 {selected_name} のPER・PBR・ROEを公式で確認する", official_url)
 
@@ -202,7 +207,7 @@ with tab1:
             send_line_notification(line_msg)
 
     else:
-        st.error("データの取得に失敗しました。時間をおいて再試行してください。")
+        st.error("データの取得に失敗しました。少し時間をおいてからリロードしてください。")
 
 with tab2:
     st.markdown("新ロジック（新高値ブレイク＆バリュー初動）で225銘柄を一斉スキャンします。")
@@ -219,13 +224,14 @@ with tab2:
                     l, p = sdf.iloc[-1], sdf.iloc[-2]
                     s = None
                     
-                    # --- スキャン用 新判定ロジック ---
                     if l['Close'] > l['High200_prev']:
                         s = "ブレイクアウト🔥"
                     elif l['Close'] > l['SMA200'] and p['Close'] <= p['SMA200']:
                         s = "バリュー初動🚨"
                     
                     if s: hits.append({"銘柄": name, "判定": s, "現在値": f"¥{l['Close']:,.1f}"})
+                
+                # サーバーに優しく、かつ高速に処理（0.01秒待機）
                 time.sleep(0.01)
             except: 
                 continue
