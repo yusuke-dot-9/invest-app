@@ -43,7 +43,7 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 5. データ取得関数（タイムゾーン修正＆エラー表示強化版） ---
+# --- 5. データ取得関数（UIエラー非表示・サイレント仕様） ---
 @st.cache_data(ttl=3600)
 def load_data(ticker_symbol):
     if not ticker_symbol.endswith('.T'): ticker_symbol = f"{ticker_symbol}.T"
@@ -51,8 +51,8 @@ def load_data(ticker_symbol):
         nk225 = yf.download("^N225", period="5y", progress=False)
         df_data = yf.download(ticker_symbol, period="5y", progress=False)
         
+        # 💡 エラー文字を出さず、静かに None を返すように変更
         if df_data.empty or nk225.empty: 
-            st.error("⚠️ Yahoo Financeから空のデータが返ってきました（通信制限の可能性）。")
             return None, None
         
         if isinstance(df_data.columns, pd.MultiIndex):
@@ -63,7 +63,6 @@ def load_data(ticker_symbol):
         df = df_data[['Open', 'High', 'Low', 'Close']].dropna()
         nk_df = pd.DataFrame({'Close': nk225['Close']}).dropna()
         
-        # 💡 日本株特有のエラーを防ぐためのタイムゾーン（時差）処理
         if df.index.tz is not None:
             df.index = df.index.tz_localize(None)
         if nk_df.index.tz is not None:
@@ -81,9 +80,8 @@ def load_data(ticker_symbol):
         
         df = df.join(nk_df[['Uptrend']], how='left').ffill()
         return df, ticker_symbol
-    except Exception as e:
-        # 💡 もしエラーが出ても、画面に赤文字で詳細を表示させる
-        st.error(f"データ取得エラー詳細: {e}")
+    except Exception:
+        # ここも静かに None を返す
         return None, None
 
 # --- 6. バックテスト計算 ---
@@ -197,8 +195,8 @@ with tab1:
                 m2.metric("勝率", f"{wr:.1f}%")
                 m3.metric("平均利回り", f"{np.mean(t_rev)*100:+.2f}%")
     else:
-        # データ取得に失敗した場合の表示（load_data内でエラーが出ているはず）
-        pass
+        # 💡 個別分析タブでのみエラーを通知（スキャン時は非表示）
+        st.warning("⚠️ データの取得に失敗しました。一時的な通信制限の可能性があります。少し時間をおいてから再試行してください。")
 
 with tab2:
     st.markdown("新ロジックで225銘柄を一斉スキャンします。")
