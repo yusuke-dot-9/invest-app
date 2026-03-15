@@ -43,7 +43,7 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 5. データ取得関数 ---
+# --- 5. データ取得関数（タイムゾーン修正＆エラー表示強化版） ---
 @st.cache_data(ttl=3600)
 def load_data(ticker_symbol):
     if not ticker_symbol.endswith('.T'): ticker_symbol = f"{ticker_symbol}.T"
@@ -51,7 +51,9 @@ def load_data(ticker_symbol):
         nk225 = yf.download("^N225", period="5y", progress=False)
         df_data = yf.download(ticker_symbol, period="5y", progress=False)
         
-        if df_data.empty or nk225.empty: return None, None
+        if df_data.empty or nk225.empty: 
+            st.error("⚠️ Yahoo Financeから空のデータが返ってきました（通信制限の可能性）。")
+            return None, None
         
         if isinstance(df_data.columns, pd.MultiIndex):
             df_data.columns = df_data.columns.get_level_values(0)
@@ -61,6 +63,12 @@ def load_data(ticker_symbol):
         df = df_data[['Open', 'High', 'Low', 'Close']].dropna()
         nk_df = pd.DataFrame({'Close': nk225['Close']}).dropna()
         
+        # 💡 日本株特有のエラーを防ぐためのタイムゾーン（時差）処理
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+        if nk_df.index.tz is not None:
+            nk_df.index = nk_df.index.tz_localize(None)
+            
         nk_df['SMA25'] = nk_df['Close'].rolling(window=25).mean()
         nk_df['SMA75'] = nk_df['Close'].rolling(window=75).mean()
         nk_df['Uptrend'] = nk_df['SMA25'] > nk_df['SMA75']
@@ -71,11 +79,11 @@ def load_data(ticker_symbol):
         df['High200_prev'] = df['High'].rolling(window=200).max().shift(1)
         df['RSI14'] = calculate_rsi(df['Close'], 14)
         
-        df.index = df.index.tz_localize(None)
-        nk_df.index = nk_df.index.tz_localize(None)
         df = df.join(nk_df[['Uptrend']], how='left').ffill()
         return df, ticker_symbol
     except Exception as e:
+        # 💡 もしエラーが出ても、画面に赤文字で詳細を表示させる
+        st.error(f"データ取得エラー詳細: {e}")
         return None, None
 
 # --- 6. バックテスト計算 ---
@@ -189,7 +197,8 @@ with tab1:
                 m2.metric("勝率", f"{wr:.1f}%")
                 m3.metric("平均利回り", f"{np.mean(t_rev)*100:+.2f}%")
     else:
-        st.error("データの取得に失敗しました。")
+        # データ取得に失敗した場合の表示（load_data内でエラーが出ているはず）
+        pass
 
 with tab2:
     st.markdown("新ロジックで225銘柄を一斉スキャンします。")
@@ -222,11 +231,8 @@ with tab2:
         else: 
             st.info("本日はシグナルが点灯している銘柄はありませんでした。")
 
-# --- 新機能：保有銘柄管理（出口戦略） ---
 with tab3:
     st.markdown("### 💼 保有銘柄の利確・損切り判定")
-    st.write("購入した銘柄を登録すると、毎日の株価と「買った手法」に基づき、自動で出口戦略（利確・損切りの指示）を判定します。")
-    
     with st.expander("➕ 新しく購入した銘柄を登録する", expanded=False):
         with st.form("add_portfolio_form"):
             col1, col2, col3, col4 = st.columns(4)
@@ -235,7 +241,6 @@ with tab3:
             with col2:
                 p_price = st.number_input("買値 (円)", min_value=1.0, value=1000.0, step=10.0)
             with col3:
-                # 💡 ここを「1株単位」で入力できるように修正しました！
                 p_qty = st.number_input("株数 (ミニカブ対応)", min_value=1, value=1, step=1)
             with col4:
                 p_strategy = st.selectbox("エントリー手法", options=["新高値ブレイク(順張り)", "バリュー初動(逆張り)"])
@@ -278,7 +283,6 @@ with tab3:
                         action = "🟡 決済（25日線割れ・トレンド終了）"
                     elif profit_rate <= -5.0:
                         action = "🔴 即損切り（-5%ルール到達）"
-                
                 elif strategy == "バリュー初動(逆張り)":
                     if profit_rate >= 20.0:
                         action = "🔵 利益確定（目標+20%到達）"
