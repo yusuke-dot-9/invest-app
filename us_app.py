@@ -66,7 +66,6 @@ def get_fundamental_growth(ticker_symbol):
         if inc is None or inc.empty:
             return None, None, None
             
-        # 探す項目の優先順位を設定（純利益が赤字なら、売上高を探す）
         targets = [
             {"name": "純利益", "keywords": ["net income common", "net income"]},
             {"name": "営業利益", "keywords": ["operating income", "ebit"]},
@@ -90,7 +89,6 @@ def get_fundamental_growth(ticker_symbol):
                     latest_val = float(series.iloc[0])
                     oldest_val = float(series.iloc[-1])
                     
-                    # 過去が赤字、または最新が赤字の場合はパーセンテージ計算できないため、次の指標へ
                     if oldest_val <= 0 or latest_val <= 0:
                         continue
                         
@@ -112,7 +110,7 @@ def get_tqqq_signal(latest, prev):
     else:
         return "🟢 待機", "現状維持・継続ホールド"
 
-# --- 6. 銘柄リスト ---
+# --- 6. 米国株＆FANG+ 銘柄リスト（パランティア対応） ---
 US_TICKERS = {
     "TQQQ (ナスダック3倍ブル)": "TQQQ",
     "SOXL (半導体3倍ブル)": "SOXL",
@@ -126,10 +124,9 @@ US_TICKERS = {
     "META (メタ/Facebook)": "META",
     "GOOGL (アルファベット/Google)": "GOOGL",
     "NFLX (ネットフリックス)": "NFLX",
-    "TSLA (テスラ)": "TSLA",
     "AVGO (ブロードコム)": "AVGO",
-    "SNOW (スノーフレイク)": "SNOW",
-    "CRWD (クラウドストライク)": "CRWD"
+    "CRWD (クラウドストライク)": "CRWD",
+    "PLTR (パランティア)": "PLTR"
 }
 
 # --- サイドバー ---
@@ -171,7 +168,6 @@ if df is not None:
         growth_rate, years_count, metric_name = get_fundamental_growth(ticker_code)
         
         if growth_rate is not None:
-            # 取得できた年数に合わせて、株価も同じ期間で比較
             lookback_days = min(len(df)-1, int(252 * (years_count - 1)))
             price_old = df['Close'].iloc[-(lookback_days + 1)]
             price_new = latest['Close']
@@ -181,7 +177,6 @@ if df is not None:
             
             c1, c2, c3 = st.columns(3)
             c1.metric(f"過去{years_count}年の株価上昇率", f"{price_growth*100:+.1f}%")
-            # 💡 「純利益」か「売上高」か、取得した項目名を自動表示！
             c2.metric(f"過去{years_count}年の{metric_name}成長率", f"{growth_rate*100:+.1f}%")
             
             if divergence > 0.5:
@@ -208,3 +203,5 @@ if df is not None:
         line_msg = f"【🇺🇸 米国株判定レポート】\n銘柄: {selected_name}\n判定: {signal_title}\n指示: {action_msg}\n価格: ${latest['Close']:,.2f}"
         send_line_notification(line_msg)
         st.success("LINEに通知を送信しました！")
+else:
+    st.error("データの取得に失敗しました。少し時間をおいてから再試行してください。")
