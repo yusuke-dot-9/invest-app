@@ -22,7 +22,7 @@ def send_line_notification(message):
         requests.post(url, headers=headers, json=data)
     except: pass
 
-# --- 3. データ取得関数（エラー表示強化版） ---
+# --- 3. データ取得関数 ---
 @st.cache_data(ttl=3600)
 def load_us_data(ticker_symbol):
     try:
@@ -138,7 +138,6 @@ valid_options = [k for k in US_TICKERS.keys() if US_TICKERS[k] != ""]
 selected_name = st.sidebar.selectbox("銘柄名を選択", options=valid_options)
 ticker_code = US_TICKERS[selected_name]
 
-# 💡 新機能：キャッシュクリアボタン
 st.sidebar.write("---")
 if st.sidebar.button("🔄 データを最新に更新（エラー解消）"):
     st.cache_data.clear()
@@ -159,15 +158,26 @@ if df is not None:
     st.info(f"**アクション指示：** {action_msg}")
     st.write("---")
     
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("現在値 (USD)", f"${latest['Close']:,.2f}")
-    col2.metric("VIX (恐怖指数)", f"{latest['VIX']:.2f}", "30以上で警戒" if latest['VIX']>=30 else "安定")
+    # 💡 新機能：過去5年間の「最高値」と「そこからの下落率」を計算
+    max_price_5y = df['High'].max()
+    drawdown_from_max = ((latest['Close'] / max_price_5y) - 1) * 100
     
+    st.markdown("### 📊 テクニカル指標 ＆ 最高値チェック")
+    
+    # 2段構え（3つ×2列）で見やすくレイアウト
+    c1, c2, c3 = st.columns(3)
+    c1.metric("現在値 (USD)", f"${latest['Close']:,.2f}")
+    c2.metric("過去5年の最高値", f"${max_price_5y:,.2f}")
+    c3.metric("最高値からの下落率", f"{drawdown_from_max:+.1f}%", "高値圏" if drawdown_from_max >= -5 else "調整中")
+    
+    st.write("") # 少し隙間を空ける
+    
+    c4, c5, c6 = st.columns(3)
+    c4.metric("VIX (恐怖指数)", f"{latest['VIX']:.2f}", "30以上で警戒" if latest['VIX']>=30 else "安定")
     dd_percent = latest['Drawdown_from_High20'] * 100
-    col3.metric("直近20日高値からの下落率", f"{dd_percent:.1f}%", "-25%で損切り" if dd_percent <= -25 else "安全")
-    
+    c5.metric("直近20日高値からの下落率", f"{dd_percent:.1f}%", "-25%で損切り" if dd_percent <= -25 else "安全")
     sma200_dist = ((latest['Close'] / latest['SMA200']) - 1) * 100
-    col4.metric("200日線との乖離率", f"{sma200_dist:+.1f}%", "-20%以下でバーゲン" if sma200_dist <= -20 else "")
+    c6.metric("200日線との乖離率", f"{sma200_dist:+.1f}%", "-20%以下でバーゲン" if sma200_dist <= -20 else "")
 
     st.write("---")
 
@@ -211,8 +221,6 @@ if df is not None:
     st.link_button(f"🔗 {ticker_code} の詳細を米Yahoo! Financeで確認", official_url)
 
     if st.button("📱 本日の判定結果をLINEに送信"):
-        line_msg = f"【🇺🇸 米国株判定レポート】\n銘柄: {selected_name}\n判定: {signal_title}\n指示: {action_msg}\n価格: ${latest['Close']:,.2f}"
+        line_msg = f"【🇺🇸 米国株判定レポート】\n銘柄: {selected_name}\n判定: {signal_title}\n指示: {action_msg}\n現在値: ${latest['Close']:,.2f}\n最高値からの下落率: {drawdown_from_max:+.1f}%"
         send_line_notification(line_msg)
         st.success("LINEに通知を送信しました！")
-
-# 💡 データがNoneだった場合は、何も表示しない（上でst.warningが出ているため）
