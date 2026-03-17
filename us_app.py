@@ -22,14 +22,16 @@ def send_line_notification(message):
         requests.post(url, headers=headers, json=data)
     except: pass
 
-# --- 3. データ取得関数 ---
+# --- 3. データ取得関数（エラー表示強化版） ---
 @st.cache_data(ttl=3600)
 def load_us_data(ticker_symbol):
     try:
         vix_data = yf.download("^VIX", period="5y", progress=False)
         df_data = yf.download(ticker_symbol, period="5y", progress=False)
         
-        if df_data.empty or vix_data.empty: return None, None
+        if df_data.empty or vix_data.empty: 
+            st.warning(f"⚠️ Yahoo Financeから {ticker_symbol} または VIX のデータが取得できませんでした。一時的な制限の可能性があります。")
+            return None, None
             
         if isinstance(df_data.columns, pd.MultiIndex):
             df_data.columns = df_data.columns.get_level_values(0)
@@ -50,9 +52,10 @@ def load_us_data(ticker_symbol):
         df = df.join(vix, how='left').ffill()
         return df, ticker_symbol
     except Exception as e:
+        st.error(f"データ取得エラー詳細 ({ticker_symbol}): {e}")
         return None, None
 
-# --- 4. 【最強版】ファンダメンタル成長率の取得（純利益→営業利益→売上高） ---
+# --- 4. ファンダメンタル成長率の取得 ---
 @st.cache_data(ttl=86400)
 def get_fundamental_growth(ticker_symbol):
     if ticker_symbol in ["TQQQ", "SOXL", "QQQ", "SPY"]:
@@ -110,7 +113,7 @@ def get_tqqq_signal(latest, prev):
     else:
         return "🟢 待機", "現状維持・継続ホールド"
 
-# --- 6. 米国株＆FANG+ 銘柄リスト（パランティア対応） ---
+# --- 6. 米国株＆FANG+ 銘柄リスト ---
 US_TICKERS = {
     "TQQQ (ナスダック3倍ブル)": "TQQQ",
     "SOXL (半導体3倍ブル)": "SOXL",
@@ -134,6 +137,14 @@ st.sidebar.header("🔍 米国銘柄選択")
 valid_options = [k for k in US_TICKERS.keys() if US_TICKERS[k] != ""]
 selected_name = st.sidebar.selectbox("銘柄名を選択", options=valid_options)
 ticker_code = US_TICKERS[selected_name]
+
+# 💡 新機能：キャッシュクリアボタン
+st.sidebar.write("---")
+if st.sidebar.button("🔄 データを最新に更新（エラー解消）"):
+    st.cache_data.clear()
+    st.sidebar.success("キャッシュを消去しました！画面をリロードします...")
+    time.sleep(1.5)
+    st.rerun()
 
 # --- メインコンテンツ ---
 df, symbol = load_us_data(ticker_code)
@@ -160,7 +171,7 @@ if df is not None:
 
     st.write("---")
 
-    # --- 株価 vs 成長率 の乖離率チェック（オートチェンジ搭載） ---
+    # --- 株価 vs 成長率 の乖離率チェック ---
     st.markdown("### 🏢 株価成長 vs 企業成長（ファンダメンタル乖離率）")
     if ticker_code in ["TQQQ", "SOXL", "QQQ", "SPY"]:
         st.write("※ETF（指数）のため、企業業績データはありません。")
@@ -203,5 +214,5 @@ if df is not None:
         line_msg = f"【🇺🇸 米国株判定レポート】\n銘柄: {selected_name}\n判定: {signal_title}\n指示: {action_msg}\n価格: ${latest['Close']:,.2f}"
         send_line_notification(line_msg)
         st.success("LINEに通知を送信しました！")
-else:
-    st.error("データの取得に失敗しました。少し時間をおいてから再試行してください。")
+
+# 💡 データがNoneだった場合は、何も表示しない（上でst.warningが出ているため）
