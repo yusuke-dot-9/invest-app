@@ -3,26 +3,12 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
-import requests
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="US株・FANG+ 判定ダッシュボード", layout="wide")
 st.title("🇺🇸 米国株＆FANG+ 投資判定ダッシュボード")
 
-# --- 2. LINE通知関数 ---
-def send_line_notification(message):
-    try:
-        if "LINE_CHANNEL_ACCESS_TOKEN" not in st.secrets or "LINE_USER_ID" not in st.secrets: 
-            return
-        token = st.secrets["LINE_CHANNEL_ACCESS_TOKEN"]
-        user_id = st.secrets["LINE_USER_ID"]
-        url = "https://api.line.me/v2/bot/message/push"
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-        data = {"to": user_id, "messages": [{"type": "text", "text": message}]}
-        requests.post(url, headers=headers, json=data)
-    except: pass
-
-# --- 3. データ取得関数 ---
+# --- 2. データ取得関数 ---
 @st.cache_data(ttl=3600)
 def load_us_data(ticker_symbol):
     try:
@@ -55,7 +41,7 @@ def load_us_data(ticker_symbol):
         st.error(f"データ取得エラー詳細 ({ticker_symbol}): {e}")
         return None, None
 
-# --- 4. ファンダメンタル成長率の取得 ---
+# --- 3. ファンダメンタル成長率の取得 ---
 @st.cache_data(ttl=86400)
 def get_fundamental_growth(ticker_symbol):
     if ticker_symbol in ["TQQQ", "SOXL", "QQQ", "SPY"]:
@@ -102,7 +88,7 @@ def get_fundamental_growth(ticker_symbol):
     except:
         return None, None, None
 
-# --- 5. 判定ロジック ---
+# --- 4. 判定ロジック ---
 def get_tqqq_signal(latest, prev):
     if latest['VIX'] >= 30 and latest['Close'] < (latest['SMA200'] * 0.8):
         return "🚨 大暴落キャッチ（全力買い）", "今すぐ全力買い・ナンピンのタイミングです"
@@ -113,13 +99,13 @@ def get_tqqq_signal(latest, prev):
     else:
         return "🟢 待機", "現状維持・継続ホールド"
 
-# --- 6. 米国株＆FANG+ 銘柄リスト ---
+# --- 5. 米国株＆FANG+ 銘柄リスト（テスラ追加） ---
 US_TICKERS = {
     "TQQQ (ナスダック3倍ブル)": "TQQQ",
     "SOXL (半導体3倍ブル)": "SOXL",
     "QQQ (ナスダック100)": "QQQ",
     "SPY (S&P500)": "SPY",
-    "--- FANG+ 構成銘柄 ---": "",
+    "--- 監視対象銘柄 ---": "",
     "NVDA (エヌビディア)": "NVDA",
     "AAPL (アップル)": "AAPL",
     "MSFT (マイクロソフト)": "MSFT",
@@ -129,7 +115,8 @@ US_TICKERS = {
     "NFLX (ネットフリックス)": "NFLX",
     "AVGO (ブロードコム)": "AVGO",
     "CRWD (クラウドストライク)": "CRWD",
-    "PLTR (パランティア)": "PLTR"
+    "PLTR (パランティア)": "PLTR",
+    "TSLA (テスラ)": "TSLA"
 }
 
 # --- サイドバー ---
@@ -158,19 +145,18 @@ if df is not None:
     st.info(f"**アクション指示：** {action_msg}")
     st.write("---")
     
-    # 💡 新機能：過去5年間の「最高値」と「そこからの下落率」を計算
+    # 💡 過去5年間の「最高値」と「そこからの下落率」を計算
     max_price_5y = df['High'].max()
     drawdown_from_max = ((latest['Close'] / max_price_5y) - 1) * 100
     
     st.markdown("### 📊 テクニカル指標 ＆ 最高値チェック")
     
-    # 2段構え（3つ×2列）で見やすくレイアウト
     c1, c2, c3 = st.columns(3)
     c1.metric("現在値 (USD)", f"${latest['Close']:,.2f}")
     c2.metric("過去5年の最高値", f"${max_price_5y:,.2f}")
     c3.metric("最高値からの下落率", f"{drawdown_from_max:+.1f}%", "高値圏" if drawdown_from_max >= -5 else "調整中")
     
-    st.write("") # 少し隙間を空ける
+    st.write("")
     
     c4, c5, c6 = st.columns(3)
     c4.metric("VIX (恐怖指数)", f"{latest['VIX']:.2f}", "30以上で警戒" if latest['VIX']>=30 else "安定")
@@ -219,8 +205,3 @@ if df is not None:
     st.write("---")
     official_url = f"https://finance.yahoo.com/quote/{ticker_code}"
     st.link_button(f"🔗 {ticker_code} の詳細を米Yahoo! Financeで確認", official_url)
-
-    if st.button("📱 本日の判定結果をLINEに送信"):
-        line_msg = f"【🇺🇸 米国株判定レポート】\n銘柄: {selected_name}\n判定: {signal_title}\n指示: {action_msg}\n現在値: ${latest['Close']:,.2f}\n最高値からの下落率: {drawdown_from_max:+.1f}%"
-        send_line_notification(line_msg)
-        st.success("LINEに通知を送信しました！")
