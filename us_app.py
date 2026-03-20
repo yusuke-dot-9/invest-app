@@ -99,7 +99,7 @@ def get_tqqq_signal(latest, prev):
     else:
         return "🟢 待機", "現状維持・継続ホールド"
 
-# --- 5. 米国株＆FANG+ 銘柄リスト（テスラ追加） ---
+# --- 5. 米国株＆FANG+ 銘柄リスト ---
 US_TICKERS = {
     "TQQQ (ナスダック3倍ブル)": "TQQQ",
     "SOXL (半導体3倍ブル)": "SOXL",
@@ -145,7 +145,6 @@ if df is not None:
     st.info(f"**アクション指示：** {action_msg}")
     st.write("---")
     
-    # 💡 過去5年間の「最高値」と「そこからの下落率」を計算
     max_price_5y = df['High'].max()
     drawdown_from_max = ((latest['Close'] / max_price_5y) - 1) * 100
     
@@ -164,6 +163,20 @@ if df is not None:
     c5.metric("直近20日高値からの下落率", f"{dd_percent:.1f}%", "-25%で損切り" if dd_percent <= -25 else "安全")
     sma200_dist = ((latest['Close'] / latest['SMA200']) - 1) * 100
     c6.metric("200日線との乖離率", f"{sma200_dist:+.1f}%", "-20%以下でバーゲン" if sma200_dist <= -20 else "")
+
+    st.write("---")
+
+    # 💡 新機能：株価トレンドグラフ（過去1年間）
+    st.markdown("### 📈 株価トレンド（過去1年間）")
+    # 過去252営業日（約1年分）のデータに絞る
+    chart_df = df[['Close', 'SMA25', 'SMA200']].tail(252).copy()
+    # グラフの凡例を分かりやすく日本語に変更
+    chart_df.columns = ['終値 (Close)', '25日線 (短期)', '200日線 (長期)']
+    
+    # 折れ線グラフを描画
+    st.line_chart(chart_df)
+    
+    st.caption("※ 青線が現在の株価です。緑色の200日線を下回ると長期的な下落トレンド、上回ると上昇トレンドの目安になります。")
 
     st.write("---")
 
