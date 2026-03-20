@@ -3,27 +3,13 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
-import requests
 import os
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="日経225 スキャン＆ポートフォリオ", layout="wide")
 st.title("🇯🇵 日経225 判定＆保有銘柄管理システム")
 
-# --- 2. LINE通知関数 ---
-def send_line_notification(message):
-    try:
-        if "LINE_CHANNEL_ACCESS_TOKEN" not in st.secrets or "LINE_USER_ID" not in st.secrets: 
-            return
-        token = st.secrets["LINE_CHANNEL_ACCESS_TOKEN"]
-        user_id = st.secrets["LINE_USER_ID"]
-        url = "https://api.line.me/v2/bot/message/push"
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-        data = {"to": user_id, "messages": [{"type": "text", "text": message}]}
-        requests.post(url, headers=headers, json=data)
-    except: pass
-
-# --- 3. ポートフォリオ（保有銘柄）の保存機能 ---
+# --- 2. ポートフォリオ（保有銘柄）の保存機能 ---
 PORTFOLIO_FILE = "portfolio.csv"
 
 def load_portfolio():
@@ -35,7 +21,7 @@ def load_portfolio():
 def save_portfolio(df):
     df.to_csv(PORTFOLIO_FILE, index=False)
 
-# --- 4. テクニカル指標計算 ---
+# --- 3. テクニカル指標計算 ---
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -43,7 +29,7 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 5. データ取得関数（UIエラー非表示・サイレント仕様） ---
+# --- 4. データ取得関数（UIエラー非表示・サイレント仕様） ---
 @st.cache_data(ttl=3600)
 def load_data(ticker_symbol):
     if not ticker_symbol.endswith('.T'): ticker_symbol = f"{ticker_symbol}.T"
@@ -51,7 +37,7 @@ def load_data(ticker_symbol):
         nk225 = yf.download("^N225", period="5y", progress=False)
         df_data = yf.download(ticker_symbol, period="5y", progress=False)
         
-        # 💡 エラー文字を出さず、静かに None を返すように変更
+        # エラー文字を出さず、静かに None を返す
         if df_data.empty or nk225.empty: 
             return None, None
         
@@ -81,10 +67,9 @@ def load_data(ticker_symbol):
         df = df.join(nk_df[['Uptrend']], how='left').ffill()
         return df, ticker_symbol
     except Exception:
-        # ここも静かに None を返す
         return None, None
 
-# --- 6. バックテスト計算 ---
+# --- 5. バックテスト計算 ---
 def run_backtest(df):
     t_trend, t_rev = [], []
     in_trend, in_rev = False, False
@@ -107,7 +92,7 @@ def run_backtest(df):
                 t_rev.append((d['Close'] / p_rev) - 1)
     return t_trend, t_rev
 
-# --- 7. 日経225 全銘柄リスト ---
+# --- 6. 日経225 全銘柄リスト ---
 COMPANY_DICT = {
     "ニッスイ": "1332", "マルハニチロ": "1333", "INPEX": "1605", "大成建設": "1801", "大林組": "1802", "清水建設": "1803", "長谷工コーポレーション": "1808", "鹿島": "1812", 
     "大和ハウス工業": "1925", "積水ハウス": "1928", "日揮HD": "1963", "日清製粉グループ本社": "2002", "双日": "2768", "アルフレッサHD": "2784", "味の素": "2802", 
@@ -143,13 +128,21 @@ COMPANY_DICT = {
     "ファーストリテイリング": "9983", "ソフトバンクグループ": "9984"
 }
 
-# --- 8. サイドバー ---
+# --- 7. サイドバー ---
 st.sidebar.header("🔍 銘柄選択")
 company_names = sorted(list(COMPANY_DICT.keys()))
 selected_name = st.sidebar.selectbox("銘柄名を選択・検索", options=company_names, index=company_names.index("三菱商事"))
 ticker_code = COMPANY_DICT[selected_name]
 
-# --- 9. メインコンテンツ（3つのタブ） ---
+# 💡 新機能：キャッシュクリアボタン
+st.sidebar.write("---")
+if st.sidebar.button("🔄 データを最新に更新（エラー解消）"):
+    st.cache_data.clear()
+    st.sidebar.success("キャッシュを消去しました！画面をリロードします...")
+    time.sleep(1.5)
+    st.rerun()
+
+# --- 8. メインコンテンツ（3つのタブ） ---
 tab1, tab2, tab3 = st.tabs(["📊 個別分析", "🚀 225銘柄スキャン", "💼 保有銘柄管理（出口戦略）"])
 
 with tab1:
@@ -195,11 +188,11 @@ with tab1:
                 m2.metric("勝率", f"{wr:.1f}%")
                 m3.metric("平均利回り", f"{np.mean(t_rev)*100:+.2f}%")
     else:
-        # 💡 個別分析タブでのみエラーを通知（スキャン時は非表示）
-        st.warning("⚠️ データの取得に失敗しました。一時的な通信制限の可能性があります。少し時間をおいてから再試行してください。")
+        st.warning("⚠️ データの取得に失敗しました。一時的な通信制限の可能性があります。左下の「🔄 データを最新に更新」ボタンを押して再試行してください。")
 
 with tab2:
     st.markdown("新ロジックで225銘柄を一斉スキャンします。")
+    st.info("※スキャン中に通信制限がかかった場合、一部の銘柄がスキップされることがあります。")
     if st.button("🚀 225銘柄を一斉スキャン開始"):
         hits = []
         pb = st.progress(0)
@@ -218,7 +211,7 @@ with tab2:
                         s = "バリュー初動🚨"
                     
                     if s: hits.append({"銘柄": name, "判定": s, "現在値": f"¥{l['Close']:,.1f}"})
-                time.sleep(0.01)
+                time.sleep(0.01) # 連続アクセスを少し和らげる
             except: 
                 continue
         pb.empty()
