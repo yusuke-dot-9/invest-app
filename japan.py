@@ -37,7 +37,6 @@ def load_data(ticker_symbol):
         nk225 = yf.download("^N225", period="5y", progress=False)
         df_data = yf.download(ticker_symbol, period="5y", progress=False)
         
-        # エラー文字を出さず、静かに None を返す
         if df_data.empty or nk225.empty: 
             return None, None
         
@@ -143,7 +142,8 @@ if st.sidebar.button("🔄 データを最新に更新（エラー解消）"):
     st.rerun()
 
 # --- 8. メインコンテンツ（3つのタブ） ---
-tab1, tab2, tab3 = st.tabs(["📊 個別分析", "🚀 225銘柄スキャン", "💼 保 बुन्देल銘柄管理（出口戦略）"])
+# 💡 ここが文字化けしていたので「保有銘柄管理」に修正しました！
+tab1, tab2, tab3 = st.tabs(["📊 個別分析", "🚀 225銘柄スキャン", "💼 保有銘柄管理（出口戦略）"])
 
 with tab1:
     df, symbol = load_data(ticker_code)
@@ -165,17 +165,11 @@ with tab1:
 
         st.write("---")
         
-        # 💡 新機能：株価トレンドグラフ（過去1年間）
+        # 株価トレンドグラフ（過去1年間）
         st.markdown("### 📈 株価トレンド（過去1年間）")
-        
-        # 過去252営業日（約1年分）のデータに絞る
         chart_df = df[['Close', 'SMA25', 'SMA200']].tail(252).copy()
-        # グラフの凡例を分かりやすく日本語に変更
         chart_df.columns = ['終値 (Close)', '25日線 (短期)', '200日線 (長期)']
-        
-        # 折れ線グラフを描画
         st.line_chart(chart_df)
-        
         st.caption("※ 青線が現在の株価です。緑色の200日線（長期）を下回ると下落トレンド、上回ると上昇トレンドの目安になります。")
 
         st.write("---")
@@ -227,7 +221,7 @@ with tab2:
                         s = "バリュー初動🚨"
                     
                     if s: hits.append({"銘柄": name, "判定": s, "現在値": f"¥{l['Close']:,.1f}"})
-                time.sleep(0.01) # 連続アクセスを少し和らげる
+                time.sleep(0.01)
             except: 
                 continue
         pb.empty()
