@@ -29,7 +29,7 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 4. データ取得関数（UIエラー非表示・サイレント仕様） ---
+# --- 4. データ取得関数（出来高追加版） ---
 @st.cache_data(ttl=3600)
 def load_data(ticker_symbol):
     if not ticker_symbol.endswith('.T'): ticker_symbol = f"{ticker_symbol}.T"
@@ -45,7 +45,8 @@ def load_data(ticker_symbol):
         if isinstance(nk225.columns, pd.MultiIndex):
             nk225.columns = nk225.columns.get_level_values(0)
         
-        df = df_data[['Open', 'High', 'Low', 'Close']].dropna()
+        # 💡 Volume（出来高）をデータに追加
+        df = df_data[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
         nk_df = pd.DataFrame({'Close': nk225['Close']}).dropna()
         
         if df.index.tz is not None:
@@ -62,33 +63,39 @@ def load_data(ticker_symbol):
         df['SMA200'] = df['Close'].rolling(window=200).mean()
         df['High200_prev'] = df['High'].rolling(window=200).max().shift(1)
         df['RSI14'] = calculate_rsi(df['Close'], 14)
+        df['Volume_SMA25'] = df['Volume'].rolling(window=25).mean() # 出来高の25日平均
         
         df = df.join(nk_df[['Uptrend']], how='left').ffill()
         return df, ticker_symbol
     except Exception:
         return None, None
 
-# --- 5. バックテスト計算 ---
+# --- 5. バックテスト計算（高勝率ロジック適用） ---
 def run_backtest(df):
     t_trend, t_rev = [], []
     in_trend, in_rev = False, False
     p_trend, p_rev = 0, 0
     for i in range(200, len(df)):
         d, y = df.iloc[i], df.iloc[i-1]
+        
+        # 順張り（ブレイクアウト）: 高値更新 + 出来高1.5倍増 + 日経上昇トレンド
         if not in_trend:
-            if d['Close'] > d['High200_prev']:
+            if d['Close'] > d['High200_prev'] and d['Volume'] > d['Volume_SMA25'] * 1.5 and d['Uptrend']:
                 in_trend, p_trend = True, d['Close']
         else:
             if d['Close'] < d['SMA25'] or d['Close'] < p_trend * 0.95:
                 in_trend = False
                 t_trend.append((d['Close'] / p_trend) - 1)
+                
+        # 逆張り（バリュー初動）: 200日線上抜け + RSI50以上
         if not in_rev:
-            if d['Close'] > d['SMA200'] and y['Close'] <= y['SMA200']:
+            if d['Close'] > d['SMA200'] and y['Close'] <= y['SMA200'] and d['RSI14'] > 50:
                 in_rev, p_rev = True, d['Close']
         else:
             if d['Close'] < d['SMA200'] * 0.98 or d['Close'] > p_rev * 1.20:
                 in_rev = False
                 t_rev.append((d['Close'] / p_rev) - 1)
+                
     return t_trend, t_rev
 
 # --- 6. 日経225 全銘柄リスト ---
@@ -116,7 +123,7 @@ COMPANY_DICT = {
     "SUBARU": "7270", "ヤマハ発動機": "7272", "ニコン": "7731", "オリンパス": "7733", "SCREEN HD": "7735", "HOYA": "7741", "キヤノン": "7751", 
     "リコー": "7752", "バンダイナムコHD": "7832", "TOPPAN HD": "7911", "大日本印刷": "7912", "ヤマハ": "7951", "任天堂": "7974", "伊藤忠商事": "8001", 
     "丸紅": "8002", "豊田通商": "8015", "三井物産": "8031", "東京エレクトロン": "8035", "住友商事": "8053", "三菱商事": "8058", "クレディセゾン": "8253", 
-    "三菱UFJ FG": "8306", "りそなHD": "8308", "三井住友トラストHD": "8309", "三井住友FG": "8316", "千葉銀行": "8331", "ふくおかFG": "8354", 
+    "三菱UFJ FG": "8306", "りそなHD": "8308", "三井住友トラストHD": "8309", "三井住友FG": "8316", "千葉銀行": "8331", "ふふおかFG": "8354", 
     "しずおかFG": "8355", "みずほFG": "8411", "オリックス": "8591", "大和証券グループ本社": "8601", "野村HD": "8604", "松井証券": "8628", 
     "SOMPO HD": "8630", "日本取引所グループ": "8697", "MS&AD": "8725", "第一生命HD": "8750", "東京海上HD": "8766", "T&D HD": "8795", 
     "三井不動産": "8801", "三菱地所": "8802", "東京建物": "8804", "住友不動産": "8830", "東武鉄道": "9001", "東急": "9005", "小田急電鉄": "9007", 
@@ -133,7 +140,6 @@ company_names = sorted(list(COMPANY_DICT.keys()))
 selected_name = st.sidebar.selectbox("銘柄名を選択・検索", options=company_names, index=company_names.index("三菱商事"))
 ticker_code = COMPANY_DICT[selected_name]
 
-# 💡 キャッシュクリアボタン
 st.sidebar.write("---")
 if st.sidebar.button("🔄 データを最新に更新（エラー解消）"):
     st.cache_data.clear()
@@ -142,7 +148,6 @@ if st.sidebar.button("🔄 データを最新に更新（エラー解消）"):
     st.rerun()
 
 # --- 8. メインコンテンツ（3つのタブ） ---
-# 💡 ここが文字化けしていたので「保有銘柄管理」に修正しました！
 tab1, tab2, tab3 = st.tabs(["📊 個別分析", "🚀 225銘柄スキャン", "💼 保有銘柄管理（出口戦略）"])
 
 with tab1:
@@ -151,21 +156,24 @@ with tab1:
         latest, prev = df.iloc[-1], df.iloc[-2]
         
         sig = "🟢 待機"
-        if latest['Close'] > latest['High200_prev']:
-            sig = "🔥 【新高値ブレイク】最強順張りシグナル！"
-        elif latest['Close'] > latest['SMA200'] and prev['Close'] <= prev['SMA200']:
-            sig = "🚨 【バリュー初動】200日線突破シグナル！"
+        # 💡 高勝率シグナル判定ロジック適用
+        if latest['Close'] > latest['High200_prev'] and latest['Volume'] > latest['Volume_SMA25'] * 1.5 and latest['Uptrend']:
+            sig = "🔥 【高勝率ブレイク】出来高急増＆トレンド合致！"
+        elif latest['Close'] > latest['SMA200'] and prev['Close'] <= prev['SMA200'] and latest['RSI14'] > 50:
+            sig = "🚨 【高勝率バリュー初動】RSIモメンタム確認済！"
             
         st.subheader(f"本日の判定：{sig}")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("現在値", f"¥{latest['Close']:,.1f}")
         col2.metric("過去200日最高値", f"¥{latest['High200_prev']:,.1f}")
         col3.metric("日経平均トレンド", "上昇 📈" if latest['Uptrend'] else "下落 📉")
-        col4.metric("200日移動平均線", "上" if latest['Close'] > latest['SMA200'] else "下")
+        
+        # 出来高の急増度合いを表示
+        vol_surge = (latest['Volume'] / latest['Volume_SMA25']) if latest['Volume_SMA25'] > 0 else 1
+        col4.metric("本日の出来高急増率", f"{vol_surge:.1f}倍", "大口資金流入" if vol_surge >= 1.5 else "通常")
 
         st.write("---")
         
-        # 株価トレンドグラフ（過去1年間）
         st.markdown("### 📈 株価トレンド（過去1年間）")
         chart_df = df[['Close', 'SMA25', 'SMA200']].tail(252).copy()
         chart_df.columns = ['終値 (Close)', '25日線 (短期)', '200日線 (長期)']
@@ -179,31 +187,37 @@ with tab1:
 
         st.divider()
         t_trend, t_rev = run_backtest(df)
-        st.subheader("📈 過去5年間のバックテスト成績")
+        st.subheader("📈 厳選フィルター適用後のバックテスト成績")
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("#### 🔥 新高値ブレイクアウト（順張り）")
+            st.markdown("#### 🔥 高勝率ブレイク（順張り）")
+            st.caption("条件：高値更新 ＋ 出来高1.5倍増 ＋ 日経平均上昇トレンド")
             if t_trend:
                 wr = len([x for x in t_trend if x > 0]) / len(t_trend) * 100
                 m1, m2, m3 = st.columns(3)
                 m1.metric("発生回数", f"{len(t_trend)}回")
                 m2.metric("勝率", f"{wr:.1f}%")
                 m3.metric("平均利回り", f"{np.mean(t_trend)*100:+.2f}%")
+            else:
+                st.write("※過去5年間で条件に合致する強力なシグナルはありませんでした。")
         with c2:
-            st.markdown("#### 🚨 バリューモメンタム（逆張り/初動）")
+            st.markdown("#### 🚨 高勝率バリュー初動（逆張り）")
+            st.caption("条件：200日線突破 ＋ RSI50以上")
             if t_rev:
                 wr = len([x for x in t_rev if x > 0]) / len(t_rev) * 100
                 m1, m2, m3 = st.columns(3)
                 m1.metric("発生回数", f"{len(t_rev)}回")
                 m2.metric("勝率", f"{wr:.1f}%")
                 m3.metric("平均利回り", f"{np.mean(t_rev)*100:+.2f}%")
+            else:
+                st.write("※過去5年間で条件に合致する強力なシグナルはありませんでした。")
     else:
         st.warning("⚠️ データの取得に失敗しました。一時的な通信制限の可能性があります。左下の「🔄 データを最新に更新」ボタンを押して再試行してください。")
 
 with tab2:
-    st.markdown("新ロジックで225銘柄を一斉スキャンします。")
-    st.info("※スキャン中に通信制限がかかった場合、一部の銘柄がスキップされることがあります。")
-    if st.button("🚀 225銘柄を一斉スキャン開始"):
+    st.markdown("厳格な高勝率ロジックで225銘柄を一斉スキャンします。")
+    st.info("※条件が厳しいため、シグナルが出る銘柄数は減りますが、その分信頼度が高くなります。")
+    if st.button("🚀 高勝率スキャン開始"):
         hits = []
         pb = st.progress(0)
         items = list(COMPANY_DICT.items())
@@ -215,10 +229,10 @@ with tab2:
                 if sdf is not None:
                     l, p = sdf.iloc[-1], sdf.iloc[-2]
                     s = None
-                    if l['Close'] > l['High200_prev']:
-                        s = "ブレイクアウト🔥"
-                    elif l['Close'] > l['SMA200'] and p['Close'] <= p['SMA200']:
-                        s = "バリュー初動🚨"
+                    if l['Close'] > l['High200_prev'] and l['Volume'] > l['Volume_SMA25'] * 1.5 and l['Uptrend']:
+                        s = "高勝率ブレイク🔥"
+                    elif l['Close'] > l['SMA200'] and p['Close'] <= p['SMA200'] and l['RSI14'] > 50:
+                        s = "高勝率バリュー初動🚨"
                     
                     if s: hits.append({"銘柄": name, "判定": s, "現在値": f"¥{l['Close']:,.1f}"})
                 time.sleep(0.01)
@@ -227,10 +241,10 @@ with tab2:
         pb.empty()
         
         if hits:
-            st.success(f"🎉 {len(hits)} 銘柄でシグナルが点灯しています！")
+            st.success(f"🎉 厳しい条件をクリアした {len(hits)} 銘柄がシグナル点灯中です！")
             st.table(pd.DataFrame(hits))
         else: 
-            st.info("本日はシグナルが点灯している銘柄はありませんでした。")
+            st.info("本日は厳格な条件をクリアした銘柄はありませんでした。（資金温存のタイミングです）")
 
 with tab3:
     st.markdown("### 💼 保有銘柄の利確・損切り判定")
