@@ -16,7 +16,6 @@ def load_us_data(ticker_symbol):
         df_data = yf.download(ticker_symbol, period="5y", progress=False)
         
         if df_data.empty or vix_data.empty: 
-            st.warning(f"⚠️ Yahoo Financeから {ticker_symbol} または VIX のデータが取得できませんでした。一時的な制限の可能性があります。")
             return None, None
             
         if isinstance(df_data.columns, pd.MultiIndex):
@@ -37,8 +36,7 @@ def load_us_data(ticker_symbol):
         
         df = df.join(vix, how='left').ffill()
         return df, ticker_symbol
-    except Exception as e:
-        st.error(f"データ取得エラー詳細 ({ticker_symbol}): {e}")
+    except Exception:
         return None, None
 
 # --- 3. ファンダメンタル成長率の取得 ---
@@ -46,7 +44,6 @@ def load_us_data(ticker_symbol):
 def get_fundamental_growth(ticker_symbol):
     if ticker_symbol in ["TQQQ", "SOXL", "QQQ", "SPY"]:
         return None, None, None
-    
     try:
         t = yf.Ticker(ticker_symbol)
         inc = t.income_stmt
@@ -77,13 +74,9 @@ def get_fundamental_growth(ticker_symbol):
                 if len(series) >= 2:
                     latest_val = float(series.iloc[0])
                     oldest_val = float(series.iloc[-1])
-                    
-                    if oldest_val <= 0 or latest_val <= 0:
-                        continue
-                        
+                    if oldest_val <= 0 or latest_val <= 0: continue
                     growth = (latest_val / oldest_val) - 1
                     return growth, len(series), target["name"]
-                    
         return None, None, None
     except:
         return None, None, None
@@ -118,12 +111,12 @@ US_TICKERS = {
     "PLTR (パランティア)": "PLTR",
     "TSLA (テスラ)": "TSLA"
 }
+valid_options = {k: v for k, v in US_TICKERS.items() if v != ""}
 
 # --- サイドバー ---
-st.sidebar.header("🔍 米国銘柄選択")
-valid_options = [k for k in US_TICKERS.keys() if US_TICKERS[k] != ""]
-selected_name = st.sidebar.selectbox("銘柄名を選択", options=valid_options)
-ticker_code = US_TICKERS[selected_name]
+st.sidebar.header("🔍 銘柄選択")
+selected_name = st.sidebar.selectbox("詳細を分析する銘柄を選択", options=list(valid_options.keys()))
+ticker_code = valid_options[selected_name]
 
 st.sidebar.write("---")
 if st.sidebar.button("🔄 データを最新に更新（エラー解消）"):
@@ -132,89 +125,129 @@ if st.sidebar.button("🔄 データを最新に更新（エラー解消）"):
     time.sleep(1.5)
     st.rerun()
 
-# --- メインコンテンツ ---
-df, symbol = load_us_data(ticker_code)
+# --- 6. メインコンテンツ（タブ分け） ---
+tab1, tab2 = st.tabs(["📊 個別銘柄の詳細分析", "🚀 全銘柄シグナル一覧（スキャン）"])
 
-if df is not None:
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
-    
-    signal_title, action_msg = get_tqqq_signal(latest, prev)
-    
-    st.markdown(f"## 🎯 本日の判定：**{signal_title}**")
-    st.info(f"**アクション指示：** {action_msg}")
-    st.write("---")
-    
-    max_price_5y = df['High'].max()
-    drawdown_from_max = ((latest['Close'] / max_price_5y) - 1) * 100
-    
-    st.markdown("### 📊 テクニカル指標 ＆ 最高値チェック")
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("現在値 (USD)", f"${latest['Close']:,.2f}")
-    c2.metric("過去5年の最高値", f"${max_price_5y:,.2f}")
-    c3.metric("最高値からの下落率", f"{drawdown_from_max:+.1f}%", "高値圏" if drawdown_from_max >= -5 else "調整中")
-    
-    st.write("")
-    
-    c4, c5, c6 = st.columns(3)
-    c4.metric("VIX (恐怖指数)", f"{latest['VIX']:.2f}", "30以上で警戒" if latest['VIX']>=30 else "安定")
-    dd_percent = latest['Drawdown_from_High20'] * 100
-    c5.metric("直近20日高値からの下落率", f"{dd_percent:.1f}%", "-25%で損切り" if dd_percent <= -25 else "安全")
-    sma200_dist = ((latest['Close'] / latest['SMA200']) - 1) * 100
-    c6.metric("200日線との乖離率", f"{sma200_dist:+.1f}%", "-20%以下でバーゲン" if sma200_dist <= -20 else "")
+with tab1:
+    df, symbol = load_us_data(ticker_code)
 
-    st.write("---")
-
-    # 💡 新機能：株価トレンドグラフ（過去1年間）
-    st.markdown("### 📈 株価トレンド（過去1年間）")
-    # 過去252営業日（約1年分）のデータに絞る
-    chart_df = df[['Close', 'SMA25', 'SMA200']].tail(252).copy()
-    # グラフの凡例を分かりやすく日本語に変更
-    chart_df.columns = ['終値 (Close)', '25日線 (短期)', '200日線 (長期)']
-    
-    # 折れ線グラフを描画
-    st.line_chart(chart_df)
-    
-    st.caption("※ 青線が現在の株価です。緑色の200日線を下回ると長期的な下落トレンド、上回ると上昇トレンドの目安になります。")
-
-    st.write("---")
-
-    # --- 株価 vs 成長率 の乖離率チェック ---
-    st.markdown("### 🏢 株価成長 vs 企業成長（ファンダメンタル乖離率）")
-    if ticker_code in ["TQQQ", "SOXL", "QQQ", "SPY"]:
-        st.write("※ETF（指数）のため、企業業績データはありません。")
-    else:
-        growth_rate, years_count, metric_name = get_fundamental_growth(ticker_code)
+    if df is not None:
+        latest = df.iloc[-1]
+        prev = df.iloc[-2]
         
-        if growth_rate is not None:
-            lookback_days = min(len(df)-1, int(252 * (years_count - 1)))
-            price_old = df['Close'].iloc[-(lookback_days + 1)]
-            price_new = latest['Close']
-            price_growth = (price_new / price_old) - 1
-            
-            divergence = price_growth - growth_rate
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric(f"過去{years_count}年の株価上昇率", f"{price_growth*100:+.1f}%")
-            c2.metric(f"過去{years_count}年の{metric_name}成長率", f"{growth_rate*100:+.1f}%")
-            
-            if divergence > 0.5:
-                div_status = "⚠️ 期待先行（株価上がりすぎ）"
-            elif divergence < -0.2:
-                div_status = "✨ 超割安（業績に株価が追いついてない）"
-            else:
-                div_status = "🟢 適正水準（業績と株価が連動）"
-                
-            c3.metric(f"乖離率（株価 - {metric_name}）", f"{divergence*100:+.1f} pt", div_status)
-            
-            if metric_name != "純利益":
-                st.info(f"💡 **AI分析コメント:** {ticker_code} は過去に純利益が赤字（または計算不可）の期間があるため、より正確に企業の成長を測る指標として自動的に **「{metric_name}成長率」** に切り替えて比較しました。")
-                
-            st.caption(f"※Yahoo Financeの仕様により決算データは最大4年分となります。より正確に比較するため、株価上昇率も業績と同じ過去{years_count}年間のデータに揃えて計算しています。")
-        else:
-            st.warning("現在、業績データを取得できませんでした。時間をおいて再試行するか、公式ページでご確認ください。")
+        signal_title, action_msg = get_tqqq_signal(latest, prev)
+        
+        st.markdown(f"## 🎯 本日の判定：**{signal_title}**")
+        st.info(f"**アクション指示：** {action_msg}")
+        st.write("---")
+        
+        max_price_5y = df['High'].max()
+        drawdown_from_max = ((latest['Close'] / max_price_5y) - 1) * 100
+        
+        st.markdown("### 📊 テクニカル指標 ＆ 最高値チェック")
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("現在値 (USD)", f"${latest['Close']:,.2f}")
+        c2.metric("過去5年の最高値", f"${max_price_5y:,.2f}")
+        c3.metric("最高値からの下落率", f"{drawdown_from_max:+.1f}%", "高値圏" if drawdown_from_max >= -5 else "調整中")
+        
+        st.write("")
+        
+        c4, c5, c6 = st.columns(3)
+        c4.metric("VIX (恐怖指数)", f"{latest['VIX']:.2f}", "30以上で警戒" if latest['VIX']>=30 else "安定")
+        dd_percent = latest['Drawdown_from_High20'] * 100
+        c5.metric("直近20日高値からの下落率", f"{dd_percent:.1f}%", "-25%で損切り" if dd_percent <= -25 else "安全")
+        sma200_dist = ((latest['Close'] / latest['SMA200']) - 1) * 100
+        c6.metric("200日線との乖離率", f"{sma200_dist:+.1f}%", "-20%以下でバーゲン" if sma200_dist <= -20 else "")
 
-    st.write("---")
-    official_url = f"https://finance.yahoo.com/quote/{ticker_code}"
-    st.link_button(f"🔗 {ticker_code} の詳細を米Yahoo! Financeで確認", official_url)
+        st.write("---")
+
+        st.markdown("### 📈 株価トレンド（過去1年間）")
+        chart_df = df[['Close', 'SMA25', 'SMA200']].tail(252).copy()
+        chart_df.columns = ['終値 (Close)', '25日線 (短期)', '200日線 (長期)']
+        st.line_chart(chart_df)
+        st.caption("※ 青線が現在の株価です。緑色の200日線を下回ると長期的な下落トレンド、上回ると上昇トレンドの目安になります。")
+
+        st.write("---")
+
+        st.markdown("### 🏢 株価成長 vs 企業成長（ファンダメンタル乖離率）")
+        if ticker_code in ["TQQQ", "SOXL", "QQQ", "SPY"]:
+            st.write("※ETF（指数）のため、企業業績データはありません。")
+        else:
+            growth_rate, years_count, metric_name = get_fundamental_growth(ticker_code)
+            
+            if growth_rate is not None:
+                lookback_days = min(len(df)-1, int(252 * (years_count - 1)))
+                price_old = df['Close'].iloc[-(lookback_days + 1)]
+                price_new = latest['Close']
+                price_growth = (price_new / price_old) - 1
+                divergence = price_growth - growth_rate
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric(f"過去{years_count}年の株価上昇率", f"{price_growth*100:+.1f}%")
+                c2.metric(f"過去{years_count}年の{metric_name}成長率", f"{growth_rate*100:+.1f}%")
+                
+                if divergence > 0.5:
+                    div_status = "⚠️ 期待先行（株価上がりすぎ）"
+                elif divergence < -0.2:
+                    div_status = "✨ 超割安（業績に追いついてない）"
+                else:
+                    div_status = "🟢 適正水準（業績と連動）"
+                    
+                c3.metric(f"乖離率（株価 - {metric_name}）", f"{divergence*100:+.1f} pt", div_status)
+            else:
+                st.warning("現在、業績データを取得できませんでした。時間をおいて再試行してください。")
+
+        st.write("---")
+        st.link_button(f"🔗 {ticker_code} の詳細を米Yahoo! Financeで確認", f"https://finance.yahoo.com/quote/{ticker_code}")
+    else:
+        st.warning("⚠️ データ取得エラー。左下の「更新」ボタンを押してください。")
+
+with tab2:
+    st.markdown("### 🚀 全監視銘柄 一斉スキャン")
+    st.write("登録されている全米国銘柄の最新シグナルとテクニカル指標を一覧表で確認します。")
+    
+    if st.button("🔄 最新データで一覧表を作成する"):
+        scan_results = []
+        pb = st.progress(0)
+        
+        items = list(valid_options.items())
+        for i, (name, code) in enumerate(items):
+            pb.progress((i + 1) / len(items))
+            try:
+                df, _ = load_us_data(code)
+                if df is not None:
+                    latest = df.iloc[-1]
+                    prev = df.iloc[-2]
+                    
+                    # シグナルのタイトルだけを取得
+                    signal_title, _ = get_tqqq_signal(latest, prev)
+                    
+                    # 乖離率の計算
+                    dd_percent = latest['Drawdown_from_High20'] * 100
+                    sma200_dist = ((latest['Close'] / latest['SMA200']) - 1) * 100
+                    
+                    scan_results.append({
+                        "ティッカー": code,
+                        "銘柄名": name.split(" ")[0], # 表示をスッキリさせるため英字部分だけ
+                        "判定シグナル": signal_title,
+                        "現在値": f"${latest['Close']:,.2f}",
+                        "直近高値からの下落率": f"{dd_percent:.1f}%",
+                        "200日線との乖離率": f"{sma200_dist:+.1f}%"
+                    })
+                time.sleep(0.1) # API制限回避のためのウェイト
+            except Exception:
+                continue
+                
+        pb.empty()
+        
+        if scan_results:
+            st.success("✅ スキャン完了！")
+            # データフレームに変換してテーブル表示
+            res_df = pd.DataFrame(scan_results)
+            st.dataframe(res_df, use_container_width=True, hide_index=True)
+            
+            st.caption("※ 「直近高値からの下落率」が -25% を超えると損切りアラート、"
+                       "「200日線との乖離率」が -20% 以下になるとバーゲン（買い場）の目安となります。")
+        else:
+            st.error("データの取得に失敗しました。時間をおいて再度お試しください。")
