@@ -92,7 +92,7 @@ def get_tqqq_signal(latest, prev):
     else:
         return "🟢 待機", "現状維持・継続ホールド"
 
-# --- 5. 米国株＆FANG+ 銘柄リスト ---
+# --- 5. 米国株＆FANG+ 銘柄リスト（マイクロン追加） ---
 US_TICKERS = {
     "TQQQ (ナスダック3倍ブル)": "TQQQ",
     "SOXL (半導体3倍ブル)": "SOXL",
@@ -109,7 +109,8 @@ US_TICKERS = {
     "AVGO (ブロードコム)": "AVGO",
     "CRWD (クラウドストライク)": "CRWD",
     "PLTR (パランティア)": "PLTR",
-    "TSLA (テスラ)": "TSLA"
+    "TSLA (テスラ)": "TSLA",
+    "MU (マイクロン)": "MU"
 }
 valid_options = {k: v for k, v in US_TICKERS.items() if v != ""}
 
@@ -220,18 +221,23 @@ with tab2:
                     latest = df.iloc[-1]
                     prev = df.iloc[-2]
                     
-                    # シグナルのタイトルだけを取得
+                    # 5年来高値の計算
+                    max_price_5y = df['High'].max()
+                    drawdown_from_max = ((latest['Close'] / max_price_5y) - 1) * 100
+                    
+                    # シグナルのタイトルを取得
                     signal_title, _ = get_tqqq_signal(latest, prev)
                     
-                    # 乖離率の計算
+                    # 各種乖離率の計算
                     dd_percent = latest['Drawdown_from_High20'] * 100
                     sma200_dist = ((latest['Close'] / latest['SMA200']) - 1) * 100
                     
+                    # 💡 ティッカーを削除し、最高値からの下落率を左側に追加
                     scan_results.append({
-                        "ティッカー": code,
                         "銘柄名": name.split(" ")[0], # 表示をスッキリさせるため英字部分だけ
                         "判定シグナル": signal_title,
                         "現在値": f"${latest['Close']:,.2f}",
+                        "最高値からの下落率": f"{drawdown_from_max:+.1f}%",
                         "直近高値からの下落率": f"{dd_percent:.1f}%",
                         "200日線との乖離率": f"{sma200_dist:+.1f}%"
                     })
